@@ -42,9 +42,33 @@ Betplay/
             sudo journalctl -u betbot -f
             ```
 
-            ## Limitaciones conocidas
+            ## Fuente de respaldo: Google AI (Gemini web)
 
-            - El scraper usa selectores genericos porque BetPlay no tiene API publica.
-            -   Si el sitio cambia su HTML, hay que ajustar los selectores.
-            -   - El plan gratuito de API-Football tiene 100 requests/dia.
-                - - El mercado Handicap no esta modelado matematicamente.
+Cuando API-Football no devuelve datos suficientes (cuota agotada, equipo no
+encontrado, etc.), el bot intenta obtener las estadisticas automatizando un
+navegador contra `gemini.google.com`, igual que hace con BetPlay.
+
+**Aviso importante:** esto automatiza la interfaz web de consumidor de
+Google (no su API), lo cual va contra sus Terminos de Servicio y puede
+resultar en el bloqueo/suspension de la cuenta de Google usada. Se eligio
+este enfoque a pedido explicito en vez de la API oficial de Gemini (que si
+permite automatizacion sin ese riesgo).
+
+Para activarlo:
+
+1. La primera vez, corre el bot con `GOOGLE_AI_HEADLESS=false` para que se
+   abra una ventana de navegador.
+2. Inicia sesion manualmente con la cuenta de Google que quieras usar.
+3. La sesion queda guardada en la carpeta `GOOGLE_AI_PROFILE_DIR`
+   (`.google_ai_profile` por defecto). En corridas siguientes puedes volver
+   a `GOOGLE_AI_HEADLESS=true`.
+
+## Limitaciones conocidas
+
+- El scraper usa selectores genericos porque BetPlay no tiene API publica.
+- Si el sitio cambia su HTML, hay que ajustar los selectores (lo mismo aplica
+  a los selectores de Gemini si Google cambia su interfaz).
+- El plan gratuito de API-Football tiene 100 requests/dia.
+- El respaldo de Google AI depende de una sesion logueada y tiene riesgo de
+  bloqueo de cuenta (ver seccion anterior).
+- El mercado Handicap no esta modelado matematicamente.

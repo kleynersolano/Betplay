@@ -1,0 +1,4 @@
+.env
+.google_ai_profile/
+__pycache__/
+*.pyc
