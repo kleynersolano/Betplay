@@ -18,7 +18,7 @@ HEADERS = {"x-apisports-key": API_FOOTBALL_KEY}
 class TeamMatchStats:
     corners: float | None
     goals: float
-    cards: float
+    cards: float | None
 
 
 @dataclass

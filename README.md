@@ -2,9 +2,9 @@
 
 Bot que entra a betplay.com.co/apuestas#starting-soon, filtra partidos de
 futbol masculino de primera division que arrancan en las proximas N horas,
-trae estadisticas de los ultimos 10 partidos por equipo (API-Football),
-calcula value% (Poisson para goles/tarjetas, promedio historico para
-corners) y envia las 3 mejores apuestas por Telegram.
+trae estadisticas de los ultimos 10 partidos por equipo, calcula value%
+(Poisson para goles/tarjetas, promedio historico para corners) y envia las
+3 mejores apuestas por Telegram.
 
 ## Estructura
 
@@ -15,6 +15,8 @@ Betplay/
     config.py
     scraper_betplay.py
     stats_provider.py
+    football_data_provider.py
+    google_ai_provider.py
     analysis.py
     telegram_notifier.py
     main.py
@@ -29,24 +31,38 @@ Betplay/
 ## Configuracion
 
 1. Crea un bot de Telegram con @BotFather y copia el token.
-2. 2. Obten tu chat_id (puedes hablarle al bot y usar https://api.telegram.org/bot<TOKEN>/getUpdates).
-   3. 3. Crea una cuenta gratis en API-Football (https://www.api-football.com/) y copia tu API key.
-      4. 4. Copia .env.example a .env y llena los valores.
-        
-         5. ## Despliegue en VPS Oracle (Ubuntu)
-        
-         6. ```bash
-            sudo bash deploy/setup_vps.sh --confirm-wipe
-            sudo nano /opt/betplay-bot/.env
-            sudo systemctl start betbot
-            sudo journalctl -u betbot -f
-            ```
+2. Obten tu chat_id (puedes hablarle al bot y usar https://api.telegram.org/bot<TOKEN>/getUpdates).
+3. Crea una cuenta gratis en API-Football (https://www.api-football.com/) y copia tu API key.
+4. (Opcional) Crea una cuenta gratis en https://www.football-data.org/ y copia tu API key.
+5. Copia .env.example a .env y llena los valores.
 
-            ## Fuente de respaldo: Google AI (Gemini web)
+## Despliegue en VPS Oracle (Ubuntu)
 
-Cuando API-Football no devuelve datos suficientes (cuota agotada, equipo no
-encontrado, etc.), el bot intenta obtener las estadisticas automatizando un
-navegador contra `gemini.google.com`, igual que hace con BetPlay.
+```bash
+sudo bash deploy/setup_vps.sh --confirm-wipe
+sudo nano /opt/betplay-bot/.env
+sudo systemctl start betbot
+sudo journalctl -u betbot -f
+```
+
+## Cadena de fuentes de estadisticas
+
+El bot intenta las fuentes en este orden, pasando a la siguiente solo si la
+anterior no tiene datos suficientes (menos de `MIN_VALID_MATCHES` partidos
+validos):
+
+1. **API-Football** (principal, 100 req/dia gratis).
+2. **football-data.org** (segunda fuente gratuita; su plan free solo aporta
+   goles, no corners/tarjetas).
+3. **Google AI (Gemini web)** (ultimo respaldo, ver abajo).
+
+## Fuente de respaldo: Google AI (Gemini web)
+
+Cuando ninguna de las dos APIs anteriores devuelve datos suficientes, el bot
+intenta obtener las estadisticas automatizando un navegador contra
+`gemini.google.com`, igual que hace con BetPlay, pidiendole que consulte
+hasta 5 fuentes confiables (Sofascore, Flashscore, WhoScored, FootyStats,
+FBref) sin que el bot entre directamente a esas paginas.
 
 **Aviso importante:** esto automatiza la interfaz web de consumidor de
 Google (no su API), lo cual va contra sus Terminos de Servicio y puede
@@ -69,6 +85,8 @@ Para activarlo:
 - Si el sitio cambia su HTML, hay que ajustar los selectores (lo mismo aplica
   a los selectores de Gemini si Google cambia su interfaz).
 - El plan gratuito de API-Football tiene 100 requests/dia.
+- football-data.org (segunda fuente) no aporta corners/tarjetas en su plan
+  gratuito, solo goles.
 - El respaldo de Google AI depende de una sesion logueada y tiene riesgo de
   bloqueo de cuenta (ver seccion anterior).
 - El mercado Handicap no esta modelado matematicamente.

@@ -2,7 +2,7 @@ import logging
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import google_ai_provider
+from app import football_data_provider, google_ai_provider
 from app.analysis import evaluate_match
 from app.config import RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
@@ -12,13 +12,24 @@ from app.telegram_notifier import notify_match_results, send_message
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("betbot")
 
+# Orden de fuentes de estadisticas: API-Football (principal) -> football-data.org
+# (segunda fuente gratuita) -> Google AI (hasta 5 fuentes via busqueda, sin entrar
+# a las paginas). Se detiene en la primera fuente que devuelva datos validos.
+STAT_PROVIDERS = [get_team_form, football_data_provider.get_team_form, google_ai_provider.get_team_form]
+
 
 def _get_team_form_with_fallback(team_name: str, venue: str) -> TeamForm | None:
-    form = get_team_form(team_name, venue=venue)
-    if form is not None and form.valid:
-        return form
-    log.info("API-Football sin datos suficientes para %s, probando Google AI", team_name)
-    return google_ai_provider.get_team_form(team_name, venue=venue) or form
+    best: TeamForm | None = None
+    for provider in STAT_PROVIDERS:
+        try:
+            form = provider(team_name, venue=venue)
+        except Exception:
+            log.exception("Fallo consultando %s para %s", provider.__module__, team_name)
+            continue
+        if form is not None and form.valid:
+            return form
+        best = best or form
+    return best
 
 
 def run_cycle() -> None:

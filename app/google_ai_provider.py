@@ -25,13 +25,14 @@ from app.stats_provider import TeamForm, TeamMatchStats
 
 log = logging.getLogger("betbot.google_ai")
 
-PROMPT_TEMPLATE = """Eres un asistente de datos deportivos. Busca en fuentes confiables \
-(Sofascore, Flashscore, WhoScored) las estadisticas de los ultimos {n} partidos del equipo \
-"{team}" jugando de {venue} en su liga local. Para cada partido dame: goles anotados por \
-"{team}", tarjetas (amarillas+rojas) recibidas por "{team}", y corners a favor de "{team}" \
-(si no hay dato de corners, usa null). Responde UNICAMENTE con un JSON valido, sin texto \
-adicional, con esta forma exacta:
-{{"matches": [{{"goals": <numero>, "cards": <numero>, "corners": <numero o null>}}, ...]}}
+PROMPT_TEMPLATE = """Eres un asistente de datos deportivos. Busca en internet, consultando \
+hasta 5 fuentes confiables (por ejemplo Sofascore, Flashscore, WhoScored, FootyStats, FBref) \
+sin que yo necesite entrar a ninguna de esas paginas, las estadisticas de los ultimos {n} \
+partidos del equipo "{team}" jugando de {venue} en su liga local. Para cada partido dame: \
+goles anotados por "{team}", tarjetas (amarillas+rojas) recibidas por "{team}", y corners a \
+favor de "{team}" (si no hay dato de corners, usa null). Responde UNICAMENTE con un JSON \
+valido, sin texto adicional, con esta forma exacta:
+{{"matches": [{{"goals": <numero>, "cards": <numero o null>, "corners": <numero o null>}}, ...]}}
 """
 
 
@@ -83,7 +84,7 @@ def get_team_form(team_name: str, venue: str, last_n: int = 10) -> TeamForm | No
         TeamMatchStats(
             corners=float(m["corners"]) if m.get("corners") is not None else None,
             goals=float(m.get("goals", 0)),
-            cards=float(m.get("cards", 0)),
+            cards=float(m["cards"]) if m.get("cards") is not None else None,
         )
         for m in data.get("matches", [])[:last_n]
     ]

@@ -15,6 +15,10 @@ TELEGRAM_BOT_TOKEN = _required("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _required("TELEGRAM_CHAT_ID")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
 
+# Segunda fuente gratuita de respaldo (https://www.football-data.org/, registro gratis).
+# Solo aporta goles (su plan free no incluye corners/tarjetas).
+FOOTBALL_DATA_API_KEY = os.getenv("FOOTBALL_DATA_API_KEY", "")
+
 # Respaldo: estadisticas via navegador automatizado contra Google AI (Gemini web).
 GOOGLE_AI_URL = os.getenv("GOOGLE_AI_URL", "https://gemini.google.com/app")
 GOOGLE_AI_PROFILE_DIR = os.getenv("GOOGLE_AI_PROFILE_DIR", ".google_ai_profile")
