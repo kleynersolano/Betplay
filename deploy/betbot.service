@@ -1,0 +1,15 @@
+[Unit]
+Description=BetPlay Analysis Bot
+After=network.target
+
+[Service]
+Type=simple
+User=betbot
+WorkingDirectory=/opt/betplay-bot
+EnvironmentFile=/opt/betplay-bot/.env
+ExecStart=/opt/betplay-bot/venv/bin/python -m app.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
