@@ -84,6 +84,21 @@ def _wait_for_match_page(page, timeout_ms: int = 20_000, poll_ms: int = 700) -> 
     return False
 
 
+def _wait_for_listing(page, timeout_ms: int = 30_000) -> bool:
+    """Espera a que el listado de partidos (SPA, renderiza via JS) tenga
+    contenido real antes de seguir. 'load'/'networkidle' no garantizan que
+    el listado ya se haya pintado; en pruebas reales, seguir sin esto
+    causaba que el filtro de Football/horas nunca se clickeara (el ciclo
+    terminaba en segundos con 0 partidos)."""
+    try:
+        page.locator(".KambiBC-event-participants__name-participant-name").first.wait_for(
+            state="visible", timeout=timeout_ms
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _click_text(page, pattern: str, exact: bool = False) -> bool:
     locator = page.locator(f"text=/^({pattern})$/i") if exact else page.locator(f"text=/{pattern}/i")
     if locator.count() == 0:
@@ -156,7 +171,8 @@ def fetch_upcoming_matches() -> list[Match]:
         # el listado. En vez de depender del historial, se navega de
         # nuevo directo a la URL del listado y se reaplican los filtros.
         page.goto(BETPLAY_URL, wait_until="load", timeout=60_000)
-        page.wait_for_timeout(1500)
+        if not _wait_for_listing(page):
+            log.warning("El listado no termino de cargar tras volver a BetPlay")
         _click_text(page, "Football|F[uú]tbol", exact=True)
         page.wait_for_timeout(800)
         _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
@@ -239,7 +255,8 @@ def fetch_upcoming_matches() -> list[Match]:
         browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
         page = browser.new_page()
         page.goto(BETPLAY_URL, wait_until="load", timeout=60_000)
-        page.wait_for_timeout(2000)
+        if not _wait_for_listing(page):
+            log.warning("El listado no termino de cargar al iniciar")
 
         _click_text(page, "Football|F[uú]tbol", exact=True)
         page.wait_for_timeout(800)
