@@ -49,59 +49,88 @@ class Match:
         return any(good in comp for good in VALID_COMPETITIONS_KEYWORDS)
 
 
-def _is_within_window(kickoff: dt.datetime, hours_ahead: int = HOURS_AHEAD) -> bool:
-    now = dt.datetime.now(dt.timezone.utc)
-    return now <= kickoff <= now + dt.timedelta(hours=hours_ahead)
+def _click_text(page, pattern: str, exact: bool = False) -> bool:
+    locator = page.locator(f"text=/^({pattern})$/i") if exact else page.locator(f"text=/{pattern}/i")
+    if locator.count() == 0:
+        return False
+    try:
+        locator.first.click(timeout=2000)
+        return True
+    except Exception:
+        return False
 
 
 def fetch_upcoming_matches() -> list[Match]:
-    """Abre BetPlay 'starting-soon' y devuelve partidos de futbol dentro de la
-    ventana de horas configurada, ya filtrados por competicion valida."""
+    """Abre BetPlay 'starting-soon', selecciona Football + ventana de horas y
+    devuelve los partidos listados (ya filtrados por competicion valida).
+    Como la pestana de horas (ej. '4 horas') ya filtra el listado del lado del
+    sitio, no se vuelve a filtrar por hora aqui."""
     matches: list[Match] = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
         page = browser.new_page()
         page.goto(BETPLAY_URL, wait_until="networkidle", timeout=60_000)
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2000)
+
+        _click_text(page, "Football|F[uú]tbol", exact=True)
+        page.wait_for_timeout(800)
+        _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
+        page.wait_for_timeout(1000)
         _scroll_to_bottom(page)
 
-        event_cards = page.locator("[data-testid='event-card'], .event-card, .sportsbook-event")
-        count = event_cards.count()
+        team_names = page.locator(".KambiBC-event-participants__name-participant-name")
+        count = team_names.count()
 
-        for i in range(count):
-            card = event_cards.nth(i)
+        league_keywords_pattern = "|".join(re.escape(k) for k in VALID_COMPETITIONS_KEYWORDS)
+        league_headers = page.locator(f"text=/{league_keywords_pattern}/i")
+        header_positions: list[tuple[float, str]] = []
+        for h in range(league_headers.count()):
             try:
-                competition = card.locator(".competition-name, .event-league").first.inner_text(timeout=2000)
-                teams_text = card.locator(".event-teams, .team-names").first.inner_text(timeout=2000)
-                time_text = card.locator(".event-time, .start-time").first.inner_text(timeout=2000)
+                box = league_headers.nth(h).bounding_box()
+                text = league_headers.nth(h).inner_text(timeout=1000)
             except Exception:
                 continue
+            if box:
+                header_positions.append((box["y"], text.strip()))
+        header_positions.sort(key=lambda item: item[0])
 
-            if "vs" not in teams_text.lower() and " - " not in teams_text:
+        for i in range(0, count - 1, 2):
+            home_el = team_names.nth(i)
+            away_el = team_names.nth(i + 1)
+            try:
+                home = home_el.inner_text(timeout=1000).strip()
+                away = away_el.inner_text(timeout=1000).strip()
+                box = home_el.bounding_box()
+            except Exception:
+                continue
+            if not home or not away or box is None:
                 continue
 
-            sep = " vs " if "vs" in teams_text.lower() else " - "
-            home, _, away = teams_text.partition(sep)
-
-            kickoff = _parse_kickoff(time_text)
-            if kickoff is None or not _is_within_window(kickoff):
-                continue
+            competition = ""
+            for y, text in header_positions:
+                if y <= box["y"] + 5:
+                    competition = text
+                else:
+                    break
 
             match = Match(
-                competition=competition.strip(),
-                home_team=home.strip(),
-                away_team=away.strip(),
-                kickoff=kickoff,
+                competition=competition,
+                home_team=home,
+                away_team=away,
+                kickoff=dt.datetime.now(dt.timezone.utc),
             )
-
             if not match.is_valid_competition:
                 continue
 
-            card.click()
+            row = home_el.locator("xpath=ancestor::*[4]")
+            try:
+                row.first.click(timeout=2000)
+            except Exception:
+                continue
             page.wait_for_timeout(1500)
             match.lines = _extract_market_lines(page)
             matches.append(match)
-            page.go_back()
+            page.go_back(timeout=10_000)
             page.wait_for_timeout(1000)
 
         browser.close()
@@ -119,18 +148,6 @@ def _scroll_to_bottom(page, max_scrolls: int = 25) -> None:
         previous_height = current_height
         page.mouse.wheel(0, current_height)
         page.wait_for_timeout(700)
-
-
-def _parse_kickoff(time_text: str) -> dt.datetime | None:
-    now = dt.datetime.now(dt.timezone.utc)
-    time_text = time_text.strip().lower()
-    for fmt in ("%H:%M", "hoy %H:%M", "%d %b %H:%M"):
-        try:
-            parsed = dt.datetime.strptime(time_text, fmt)
-            return now.replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
-        except ValueError:
-            continue
-    return None
 
 
 _MARKET_HEADING_RE = re.compile(r"^Total de (Tiros de Esquina|goles|tarjetas)", re.I)
