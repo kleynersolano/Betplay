@@ -45,6 +45,12 @@ def run_cycle() -> None:
         return
     log.info("Partidos validos encontrados: %d", len(matches))
     for match in matches:
+        if not match.lines:
+            log.warning(
+                "Sin cuotas extraidas para %s vs %s, se omite (no se consulta IA)",
+                match.home_team, match.away_team,
+            )
+            continue
         try:
             home_form = _get_team_form_with_fallback(
                 match.home_team, venue="home", is_national_team=match.is_national_team_match

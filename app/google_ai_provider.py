@@ -56,13 +56,30 @@ amistosos) de la seleccion nacional de "{team}".
 
 
 def _extract_json(text: str) -> dict | None:
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
+    """Busca el objeto JSON que contiene "matches" dentro de un texto que
+    puede tener mucho mas contenido alrededor (toda la pagina visible).
+    No usa una regex greedy de '{...}' porque con el texto de la pagina
+    completa eso capturaria desde el primer '{' hasta el ULTIMO '}' de
+    toda la pagina. En vez de eso, ubica el '{' que abre el objeto que
+    contiene "matches" y cuenta llaves balanceadas hasta cerrarlo."""
+    key_pos = text.find('"matches"')
+    if key_pos == -1:
         return None
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
+    start = text.rfind("{", 0, key_pos)
+    if start == -1:
         return None
+    depth = 0
+    for i, ch in enumerate(text[start:], start=start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
 
 
 def _find_input(page):
@@ -87,7 +104,7 @@ def _find_input(page):
     return None
 
 
-def _ask_google_ai_mode(prompt: str) -> str | None:
+def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 30_000) -> str | None:
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             GOOGLE_AI_PROFILE_DIR,
@@ -109,13 +126,25 @@ def _ask_google_ai_mode(prompt: str) -> str | None:
             page.keyboard.type(prompt, delay=8)
             page.wait_for_timeout(300)
             page.keyboard.press("Enter")
-            page.wait_for_timeout(20000)
-            response_blocks = page.locator(
-                "[data-async-context*='aimode'], .aimode-answer, #rso div[data-content-feature]"
-            )
-            if response_blocks.count() == 0:
-                return None
-            return response_blocks.last.inner_text()
+
+            # No se usa un selector fijo del contenedor de respuesta (la UI de
+            # Google cambia seguido y nunca se confirmo contra el DOM real).
+            # En vez de eso se espera a que el JSON pedido ("matches") aparezca
+            # en cualquier parte del texto visible de la pagina, sondeando.
+            elapsed = 0
+            poll_ms = 1500
+            body = page.locator("body")
+            while elapsed < max_wait_ms:
+                page.wait_for_timeout(poll_ms)
+                elapsed += poll_ms
+                try:
+                    text = body.inner_text(timeout=2000)
+                except Exception:
+                    continue
+                if '"matches"' in text:
+                    return text
+            log.warning("Timeout esperando respuesta del Modo IA (no aparecio el JSON)")
+            return None
         finally:
             context.close()
 

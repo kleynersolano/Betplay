@@ -162,7 +162,13 @@ def fetch_upcoming_matches() -> list[Match]:
             except Exception:
                 log.warning("  No se pudo entrar al partido %s vs %s", home, away)
                 continue
-            page.wait_for_timeout(1500)
+            try:
+                page.get_by_text(re.compile("Resultado Final", re.I)).first.wait_for(
+                    state="visible", timeout=8000
+                )
+            except Exception:
+                log.warning("  La pagina del partido %s vs %s no termino de cargar", home, away)
+            page.wait_for_timeout(500)
             match.lines = _extract_market_lines(page)
             log.info("  -> %d cuotas extraidas", len(match.lines))
             matches.append(match)
@@ -217,9 +223,22 @@ _MARKET_HEADING_RE = re.compile(r"^Total de (Tiros de Esquina|goles|tarjetas)", 
 _ROW_RE = re.compile(r"^(M[aá]s de|Menos de)\s*([\d.,]+)\s+([\d.,]+)$", re.I)
 
 
+def _scroll_into_markets(page, max_scrolls: int = 20) -> None:
+    """La pagina de detalle del partido tambien virtualiza secciones: los
+    mercados 'Total de goles/tarjetas/Tiros de Esquina' no entran al DOM
+    hasta que se scrollea hacia ellos. Se scrollea hasta que aparezca al
+    menos un encabezado de mercado o se agoten los intentos."""
+    for _ in range(max_scrolls):
+        if page.locator("text=/^Total de (Tiros de Esquina|goles|tarjetas)/i").count() > 0:
+            return
+        page.mouse.wheel(0, 700)
+        page.wait_for_timeout(300)
+
+
 def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
     """Lee los mercados de goles/tarjetas/tiros de esquina actualmente
     visibles en la pestana activa de la pagina del partido."""
+    _scroll_into_markets(page)
     headings = page.locator("text=/^Total de (Tiros de Esquina|goles|tarjetas)/i")
     for i in range(headings.count()):
         heading = headings.nth(i)
@@ -261,18 +280,21 @@ def _extract_market_lines(page) -> list[MarketLine]:
     tiros de esquina y tarjetas (pestana 'Tarjetas y Tiros de Esquina', con
     sub-pestanas 'Tiros de Esquina' y 'Tarjetas')."""
     lines: list[MarketLine] = []
+    page.evaluate("window.scrollTo(0, 0)")
     _collect_visible_markets(page, lines)
 
     combined_tab = page.locator("text=/Tarjetas y Tiros de Esquina/i").first
     if combined_tab.count() > 0:
         combined_tab.click()
         page.wait_for_timeout(800)
+        page.evaluate("window.scrollTo(0, 0)")
         _collect_visible_markets(page, lines)
 
         cards_subtab = page.locator("text=/^Tarjetas$/i").first
         if cards_subtab.count() > 0:
             cards_subtab.click()
             page.wait_for_timeout(800)
+            page.evaluate("window.scrollTo(0, 0)")
             _collect_visible_markets(page, lines)
 
     return lines
