@@ -246,9 +246,20 @@ def fetch_upcoming_matches() -> list[Match]:
                 # posicion en pantalla (ej. la barra de filtros pegajosa).
                 # locator.click() si verifica que el elemento sea visible y
                 # no este tapado antes de clickear, y lanza error si no.
-                page.locator(
+                #
+                # El listado virtualiza filas: las que no estan en pantalla
+                # se quitan del DOM. Si la fila del partido ya no esta
+                # visible (porque scrolleamos hacia otras mas abajo), el
+                # locator no la encuentra y el click falla en timeout. Por
+                # eso primero se hace scrollIntoView por JS (no depende de
+                # que Playwright considere "accionable" el elemento) y
+                # recien despues se clickea.
+                row = page.locator(
                     ".KambiBC-event-participants__name-participant-name"
-                ).nth(i).click(timeout=5000)
+                ).nth(i)
+                row.evaluate("el => el.scrollIntoView({block: 'center'})")
+                page.wait_for_timeout(300)
+                row.click(timeout=8000)
             except Exception:
                 log.warning("  No se pudo entrar al partido %s vs %s", home, away)
                 continue

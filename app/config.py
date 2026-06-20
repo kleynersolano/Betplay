@@ -27,6 +27,12 @@ HOURS_AHEAD = int(os.getenv("HOURS_AHEAD", "4"))
 RUN_INTERVAL_MINUTES = int(os.getenv("RUN_INTERVAL_MINUTES", "30"))
 MIN_ODDS = float(os.getenv("MIN_ODDS", "2.0"))
 MIN_VALUE_PERCENT = float(os.getenv("MIN_VALUE_PERCENT", "5.0"))
+# Techo de sanidad: un edge real (incluso en libros blandos) casi nunca
+# supera ~25-30%. Un value% por encima de esto no es una oportunidad, es
+# casi siempre lambda mal estimada (datos de Google AI poco confiables) o
+# una muestra insuficiente. Un apostador profesional descarta estos casos
+# en vez de apostarles con "confianza maxima".
+MAX_VALUE_PERCENT = float(os.getenv("MAX_VALUE_PERCENT", "30.0"))
 MIN_VALID_MATCHES = int(os.getenv("MIN_VALID_MATCHES", "6"))
 
 # Margen tipico de la casa (overround) para un mercado de 2 vias en BetPlay.

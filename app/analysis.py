@@ -9,7 +9,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from app.config import MIN_VALUE_PERCENT, MARKET_PRIORITY, DEFAULT_OVERROUND
+from app.config import MIN_VALUE_PERCENT, MAX_VALUE_PERCENT, MARKET_PRIORITY, DEFAULT_OVERROUND
 
 log = logging.getLogger("betbot.analysis")
 from app.scraper_betplay import Match, MarketLine
@@ -267,6 +267,17 @@ def evaluate_match(
         considered += 1
         if best_seen is None or value_percent > best_seen[0]:
             best_seen = (value_percent, line.market, line.selection)
+
+        if value_percent > MAX_VALUE_PERCENT:
+            # Edge "demasiado bueno para ser verdad": casi siempre es lambda
+            # mal estimada (Google AI dio cifras poco fiables), no una
+            # oportunidad real. Se descarta en vez de inflar la confianza.
+            log.info(
+                "  [%s vs %s] descartado por value irreal (%.1f%% > %.1f%%) en %s | %s",
+                match.home_team, match.away_team, value_percent, MAX_VALUE_PERCENT,
+                line.market, line.selection,
+            )
+            continue
 
         if value_percent >= MIN_VALUE_PERCENT:
             evaluations.append(
