@@ -355,11 +355,16 @@ def _scroll_into_markets(page, max_scrolls: int = 40) -> None:
 # Antes solo se buscaban encabezados que empezaran exactamente con
 # "Total de Tiros de Esquina/goles/tarjetas", lo que dejaba afuera los
 # mercados POR EQUIPO (ej. "Tiros de Esquina - Alemania", "Goles de Costa
-# de Marfil"), que no siempre empiezan con esa misma palabra "Total". Se
-# amplia para capturar cualquier encabezado de esos 3 mercados (total o
-# por equipo), excluyendo handicap (prohibido) y goleador/anotador
-# (mercado de jugadores, no de equipo/total).
-_MARKET_HEADING_RE = "text=/(tiros de esquina|tarjeta|gol(?!eador))/i"
+# de Marfil"). Se amplio quitando el "Total de" obligatorio del inicio,
+# pero SIN la "^" de anclaje al inicio del texto el regex empezo a
+# emparejar con CUALQUIER elemento que contuviera "gol"/"tarjeta" en
+# cualquier parte de su texto -- incluyendo contenedores enteros con todo
+# el bloque de cuotas adentro -- lo que en pruebas reales disparo el
+# conteo de "headings" a cientos y volvio la extraccion lentisima y
+# practicamente vacia. Se mantiene el anclaje "^" (solo encabezados que
+# EMPIEZAN con estas palabras) pero ahora sin exigir el prefijo "Total
+# de", para cubrir variantes por equipo como "Tiros de Esquina - Alemania".
+_MARKET_HEADING_RE = "text=/^(Total de )?(Tiros de Esquina|Goles|Tarjetas)\\b/i"
 _EXCLUDED_HEADING_RE = re.compile(r"hándicap|handicap|goleador|anotador|primer gol|[uú]ltimo gol", re.I)
 
 
@@ -375,7 +380,13 @@ def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
             market_name = heading.inner_text(timeout=1000).strip()
         except Exception:
             continue
-        if not market_name or _EXCLUDED_HEADING_RE.search(market_name):
+        # Si el "encabezado" en realidad es un contenedor grande (varias
+        # lineas), el texto va a ser largo y con saltos de linea -- no es
+        # un encabezado real, se descarta para no procesar bloques enteros
+        # como si fueran un solo titulo.
+        if not market_name or len(market_name) > 80 or "\n" in market_name:
+            continue
+        if _EXCLUDED_HEADING_RE.search(market_name):
             continue
         # El heading no tiene un following-sibling util: en el DOM real de
         # Kambi, heading y filas viven dentro de un ancestro comun con la
