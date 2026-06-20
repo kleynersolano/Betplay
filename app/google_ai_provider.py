@@ -55,7 +55,8 @@ def _ask_google_ai_mode(prompt: str) -> str | None:
         )
         try:
             page = context.new_page()
-            page.goto(GOOGLE_AI_URL, wait_until="networkidle")
+            page.goto(GOOGLE_AI_URL, wait_until="domcontentloaded", timeout=60_000)
+            page.wait_for_timeout(2500)
             input_box = page.locator(
                 "textarea[name='q'], textarea#APjFqb, div[contenteditable='true'][role='textbox']"
             ).first
