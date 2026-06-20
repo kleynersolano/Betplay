@@ -44,4 +44,5 @@ EXCLUDED_KEYWORDS = [
     "rfef", "playoff", "promocion de ascenso", "primera rfef",
     "tercera division", "esports", "esport", "e-soccer", "e-football",
     "efootball", "fc 26", "cyber", "battle", "(e)", "virtual",
+    "copa de la liga",
 ]
