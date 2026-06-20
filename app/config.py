@@ -19,8 +19,10 @@ API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
 # Solo aporta goles (su plan free no incluye corners/tarjetas).
 FOOTBALL_DATA_API_KEY = os.getenv("FOOTBALL_DATA_API_KEY", "")
 
-# Respaldo: estadisticas via navegador automatizado contra Google AI (Gemini web).
-GOOGLE_AI_URL = os.getenv("GOOGLE_AI_URL", "https://gemini.google.com/app")
+# Respaldo: estadisticas via navegador automatizado contra el Modo IA de Google
+# Search (la pestaña "Modo IA" debajo del buscador en google.com), no el chat
+# de gemini.google.com. udm=50 abre Google Search directo en Modo IA.
+GOOGLE_AI_URL = os.getenv("GOOGLE_AI_URL", "https://www.google.com/search?udm=50")
 GOOGLE_AI_PROFILE_DIR = os.getenv("GOOGLE_AI_PROFILE_DIR", ".google_ai_profile")
 GOOGLE_AI_HEADLESS = os.getenv("GOOGLE_AI_HEADLESS", "true").lower() == "true"
 

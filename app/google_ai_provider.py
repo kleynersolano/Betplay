@@ -1,6 +1,7 @@
 """
-Estadisticas de equipos via Google AI (gemini.google.com) usando un navegador
-automatizado con Playwright, igual que el scraper de BetPlay.
+Estadisticas de equipos via el Modo IA de Google Search (la pestana "Modo IA"
+debajo del buscador en google.com, no el chat de gemini.google.com) usando un
+navegador automatizado con Playwright, igual que el scraper de BetPlay.
 
 AVISO: automatizar la interfaz web de consumidor de Google (en vez de su API
 oficial) va contra los Terminos de Servicio de Google y puede resultar en el
@@ -46,7 +47,7 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
-def _ask_gemini(prompt: str) -> str | None:
+def _ask_google_ai_mode(prompt: str) -> str | None:
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             GOOGLE_AI_PROFILE_DIR,
@@ -55,12 +56,16 @@ def _ask_gemini(prompt: str) -> str | None:
         try:
             page = context.new_page()
             page.goto(GOOGLE_AI_URL, wait_until="networkidle")
-            input_box = page.locator("rich-textarea div[contenteditable='true']").first
+            input_box = page.locator(
+                "textarea[name='q'], textarea#APjFqb, div[contenteditable='true'][role='textbox']"
+            ).first
             input_box.click()
             input_box.fill(prompt)
             input_box.press("Enter")
             page.wait_for_timeout(15000)
-            response_blocks = page.locator("message-content")
+            response_blocks = page.locator(
+                "[data-async-context*='aimode'], .aimode-answer, #rso div[data-content-feature]"
+            )
             if response_blocks.count() == 0:
                 return None
             return response_blocks.last.inner_text()
@@ -71,7 +76,7 @@ def _ask_gemini(prompt: str) -> str | None:
 def get_team_form(team_name: str, venue: str, last_n: int = 10) -> TeamForm | None:
     prompt = PROMPT_TEMPLATE.format(n=last_n, team=team_name, venue=venue)
     try:
-        raw = _ask_gemini(prompt)
+        raw = _ask_google_ai_mode(prompt)
     except Exception:
         log.exception("Fallo consultando Google AI para %s", team_name)
         return None

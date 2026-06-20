@@ -54,15 +54,17 @@ validos):
 1. **API-Football** (principal, 100 req/dia gratis).
 2. **football-data.org** (segunda fuente gratuita; su plan free solo aporta
    goles, no corners/tarjetas).
-3. **Google AI (Gemini web)** (ultimo respaldo, ver abajo).
+3. **Google AI (Modo IA de Google Search)** (ultimo respaldo, ver abajo).
 
-## Fuente de respaldo: Google AI (Gemini web)
+## Fuente de respaldo: Modo IA de Google Search
 
 Cuando ninguna de las dos APIs anteriores devuelve datos suficientes, el bot
-intenta obtener las estadisticas automatizando un navegador contra
-`gemini.google.com`, igual que hace con BetPlay, pidiendole que consulte
-hasta 5 fuentes confiables (Sofascore, Flashscore, WhoScored, FootyStats,
-FBref) sin que el bot entre directamente a esas paginas.
+intenta obtener las estadisticas automatizando un navegador contra el "Modo
+IA" de Google Search (`google.com/search?udm=50`, la pestana que aparece
+debajo del buscador, no el chat de `gemini.google.com`), igual que hace con
+BetPlay, pidiendole que consulte hasta 5 fuentes confiables (Sofascore,
+Flashscore, WhoScored, FootyStats, FBref) sin que el bot entre directamente
+a esas paginas.
 
 **Aviso importante:** esto automatiza la interfaz web de consumidor de
 Google (no su API), lo cual va contra sus Terminos de Servicio y puede
@@ -83,7 +85,7 @@ Para activarlo:
 
 - El scraper usa selectores genericos porque BetPlay no tiene API publica.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (lo mismo aplica
-  a los selectores de Gemini si Google cambia su interfaz).
+  a los selectores del Modo IA si Google cambia su interfaz).
 - El plan gratuito de API-Football tiene 100 requests/dia.
 - football-data.org (segunda fuente) no aporta corners/tarjetas en su plan
   gratuito, solo goles.
