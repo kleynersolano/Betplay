@@ -155,7 +155,7 @@ def fetch_upcoming_matches() -> list[Match]:
         # terminaba saliendo de BetPlay por completo y no volvia a cargar
         # el listado. En vez de depender del historial, se navega de
         # nuevo directo a la URL del listado y se reaplican los filtros.
-        page.goto(BETPLAY_URL, wait_until="networkidle", timeout=60_000)
+        page.goto(BETPLAY_URL, wait_until="load", timeout=60_000)
         page.wait_for_timeout(1500)
         _click_text(page, "Football|F[uú]tbol", exact=True)
         page.wait_for_timeout(800)
@@ -238,7 +238,7 @@ def fetch_upcoming_matches() -> list[Match]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
         page = browser.new_page()
-        page.goto(BETPLAY_URL, wait_until="networkidle", timeout=60_000)
+        page.goto(BETPLAY_URL, wait_until="load", timeout=60_000)
         page.wait_for_timeout(2000)
 
         _click_text(page, "Football|F[uú]tbol", exact=True)
@@ -375,11 +375,25 @@ def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
 
 
 def _extract_market_lines(page) -> list[MarketLine]:
-    """Extrae cuotas de goles (pestana 'Todos', visible por defecto), y de
+    """Extrae cuotas de goles (pestana 'Partido & Total de goles'), y de
     tiros de esquina y tarjetas (pestana 'Tarjetas y Tiros de Esquina', con
     sub-pestanas 'Tiros de Esquina' y 'Tarjetas')."""
     lines: list[MarketLine] = []
     page.evaluate("window.scrollTo(0, 0)")
+
+    # La pestana con el mercado de goles NO siempre esta activa por
+    # defecto al entrar al partido (en pruebas reales, solo el primer
+    # partido la tenia activa por casualidad; los demas mostraban otra
+    # pestana y por eso no se encontraba "Total de goles"). Se clickea
+    # explicitamente para garantizar que este visible.
+    goals_tab = page.locator("text=/Partido\\s*&?\\s*Total de goles|^Total de goles$/i").first
+    if goals_tab.count() > 0:
+        try:
+            goals_tab.click(timeout=2000)
+            page.wait_for_timeout(800)
+        except Exception:
+            pass
+
     _collect_visible_markets(page, lines)
 
     combined_tab = page.locator("text=/Tarjetas y Tiros de Esquina/i").first
