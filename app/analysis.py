@@ -9,7 +9,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from app.config import MIN_VALUE_PERCENT, MARKET_PRIORITY
+from app.config import MIN_VALUE_PERCENT, MARKET_PRIORITY, DEFAULT_OVERROUND
 
 log = logging.getLogger("betbot.analysis")
 from app.scraper_betplay import Match, MarketLine
@@ -154,6 +154,42 @@ def _implied_prob(odds: float) -> float:
     return 1 / odds
 
 
+def _build_opposite_index(match: Match) -> dict[tuple[str, float], dict[str, float]]:
+    """Indexa las cuotas del partido por (mercado, valor de linea) para poder
+    encontrar el lado opuesto. Para 'Total de goles | Más de 2.5 @ 2.05'
+    guarda {('total de goles', 2.5): {'over': 2.05, 'under': <cuota Menos 2.5>}}.
+    Con ambos lados se puede calcular el overround REAL del mercado y quitar
+    el margen de la casa."""
+    index: dict[tuple[str, float], dict[str, float]] = {}
+    for line in match.lines:
+        parsed = _parse_line_value(line.selection)
+        if parsed is None:
+            continue
+        direction, line_value = parsed
+        key = (line.market.lower(), line_value)
+        index.setdefault(key, {})[direction] = line.odds
+    return index
+
+
+def _fair_implied_prob(
+    line, direction: str, line_value: float,
+    opp_index: dict[tuple[str, float], dict[str, float]],
+) -> float:
+    """Probabilidad implicita JUSTA = sin el margen de la casa (vig).
+    La cuota cruda incluye el overround del corredor (Over+Under suman >100%).
+    Si tenemos las dos cuotas de la linea, normalizamos por el overround real;
+    si solo hay una, descontamos el margen tipico DEFAULT_OVERROUND. Sin esto
+    el value queda inflado ~6-8% en TODA apuesta -> value falso."""
+    raw = _implied_prob(line.odds)
+    pair = opp_index.get((line.market.lower(), line_value), {})
+    other = pair.get("under" if direction == "over" else "over")
+    if other:
+        overround = raw + _implied_prob(other)
+    else:
+        overround = DEFAULT_OVERROUND
+    return raw / overround if overround > 0 else raw
+
+
 def evaluate_match(
     match: Match, home_form: TeamForm | None, away_form: TeamForm | None
 ) -> list[BetEvaluation]:
@@ -169,6 +205,7 @@ def evaluate_match(
     evaluations: list[BetEvaluation] = []
     best_seen: tuple[float, str, str] | None = None  # (value%, market, selection)
     considered = 0
+    opp_index = _build_opposite_index(match)
     for line in match.lines:
         stat = _stat_for_market(line.market)
         if stat is None:
@@ -221,7 +258,10 @@ def evaluate_match(
             prob_over = min(0.95, max(0.05, 0.5 + (lam - line_value) / max(lam, 1)))
             prob_real = prob_over if direction == "over" else 1 - prob_over
 
-        implied = _implied_prob(line.odds)
+        # Probabilidad implicita JUSTA (sin el margen de la casa). Comparar
+        # contra la cuota cruda sobreestimaba el value en el margen del
+        # corredor (~6-8%), generando value falso en todo el tablero.
+        implied = _fair_implied_prob(line, direction, line_value, opp_index)
         value_percent = (prob_real - implied) / implied * 100 if implied > 0 else 0.0
 
         considered += 1

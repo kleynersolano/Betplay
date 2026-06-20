@@ -29,6 +29,12 @@ MIN_ODDS = float(os.getenv("MIN_ODDS", "2.0"))
 MIN_VALUE_PERCENT = float(os.getenv("MIN_VALUE_PERCENT", "5.0"))
 MIN_VALID_MATCHES = int(os.getenv("MIN_VALID_MATCHES", "6"))
 
+# Margen tipico de la casa (overround) para un mercado de 2 vias en BetPlay.
+# Cuando SI tenemos las dos cuotas (Mas y Menos de la misma linea) se calcula
+# el overround real; cuando solo tenemos un lado se usa este valor para
+# estimar y descontar el margen. 1.08 = 8% de margen, conservador.
+DEFAULT_OVERROUND = float(os.getenv("DEFAULT_OVERROUND", "1.08"))
+
 # Competiciones donde juegan selecciones nacionales (no clubes), usadas para
 # pedirle a Google AI Mode estadisticas de "ultimos partidos oficiales" en
 # vez de "ultimos partidos en su liga local" (las selecciones no tienen liga).
