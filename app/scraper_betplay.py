@@ -150,10 +150,13 @@ def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
         container = heading.locator("xpath=following-sibling::*[1]")
         if container.count() == 0:
             continue
-        see_more = container.first.locator("text=/Ver m[aá]s|Ocultar la lista/i").first
-        if see_more.count() > 0 and "ver" in see_more.inner_text(timeout=1000).lower():
-            see_more.click()
-            page.wait_for_timeout(400)
+        show_list = container.first.locator("text=/Mostrar la lista|Ver m[aá]s/i").first
+        if show_list.count() > 0:
+            try:
+                show_list.click(timeout=1000)
+                page.wait_for_timeout(400)
+            except Exception:
+                pass
         try:
             block_text = container.first.inner_text(timeout=1000)
         except Exception:
