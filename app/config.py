@@ -24,10 +24,14 @@ GOOGLE_AI_URL = os.getenv("GOOGLE_AI_URL", "https://gemini.google.com/app")
 GOOGLE_AI_PROFILE_DIR = os.getenv("GOOGLE_AI_PROFILE_DIR", ".google_ai_profile")
 GOOGLE_AI_HEADLESS = os.getenv("GOOGLE_AI_HEADLESS", "true").lower() == "true"
 
+# Navegador visible para el scraper de BetPlay (util para correr localmente
+# y ver el proceso en pantalla). En servidor sin entorno grafico debe ir en true.
+BETPLAY_HEADLESS = os.getenv("BETPLAY_HEADLESS", "false").lower() == "true"
+
 HOURS_AHEAD = int(os.getenv("HOURS_AHEAD", "4"))
 RUN_INTERVAL_MINUTES = int(os.getenv("RUN_INTERVAL_MINUTES", "30"))
 MIN_ODDS = float(os.getenv("MIN_ODDS", "2.0"))
-MIN_VALUE_PERCENT = float(os.getenv("MIN_VALUE_PERCENT", "3.5"))
+MIN_VALUE_PERCENT = float(os.getenv("MIN_VALUE_PERCENT", "5.0"))
 MIN_VALID_MATCHES = int(os.getenv("MIN_VALID_MATCHES", "6"))
 
 VALID_COMPETITIONS_KEYWORDS = [

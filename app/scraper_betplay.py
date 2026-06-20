@@ -14,7 +14,13 @@ from dataclasses import dataclass, field
 
 from playwright.sync_api import sync_playwright
 
-from app.config import EXCLUDED_KEYWORDS, HOURS_AHEAD, MIN_ODDS, VALID_COMPETITIONS_KEYWORDS
+from app.config import (
+    BETPLAY_HEADLESS,
+    EXCLUDED_KEYWORDS,
+    HOURS_AHEAD,
+    MIN_ODDS,
+    VALID_COMPETITIONS_KEYWORDS,
+)
 
 BETPLAY_URL = "https://betplay.com.co/apuestas#starting-soon"
 
@@ -52,10 +58,11 @@ def fetch_upcoming_matches() -> list[Match]:
     ventana de horas configurada, ya filtrados por competicion valida."""
     matches: list[Match] = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
         page = browser.new_page()
         page.goto(BETPLAY_URL, wait_until="networkidle", timeout=60_000)
         page.wait_for_timeout(3000)
+        _scroll_to_bottom(page)
 
         event_cards = page.locator("[data-testid='event-card'], .event-card, .sportsbook-event")
         count = event_cards.count()
@@ -98,6 +105,19 @@ def fetch_upcoming_matches() -> list[Match]:
 
         browser.close()
     return matches
+
+
+def _scroll_to_bottom(page, max_scrolls: int = 25) -> None:
+    """Hace scroll hasta que la altura de la pagina deja de crecer (carga
+    perezosa de mas partidos) o se alcanza el limite de intentos."""
+    previous_height = -1
+    for _ in range(max_scrolls):
+        current_height = page.evaluate("document.body.scrollHeight")
+        if current_height == previous_height:
+            break
+        previous_height = current_height
+        page.mouse.wheel(0, current_height)
+        page.wait_for_timeout(700)
 
 
 def _parse_kickoff(time_text: str) -> dt.datetime | None:
