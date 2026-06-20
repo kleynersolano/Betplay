@@ -129,13 +129,36 @@ def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 30_000) -> str | None:
             if input_box is None:
                 log.warning("No se encontro el campo de texto del Modo IA")
                 return None
-            input_box.click()
-            page.wait_for_timeout(300)
+            # El textarea del Modo IA tiene autofocus y a veces nunca queda
+            # "stable" para Playwright -> input_box.click() hacia timeout de
+            # 30s y tumbaba la consulta entera (paso con Tunez). Se enfoca por
+            # JS (no exige accionabilidad) y, si falla, se sigue igual porque
+            # el autofocus suele bastar. Luego se escribe por teclado.
+            try:
+                input_box.evaluate("el => el.focus()")
+            except Exception:
+                pass
+            page.wait_for_timeout(200)
             # keyboard.type escribe en el elemento enfocado y evita la revision
             # de "accionabilidad" del locator, que el textarea del Modo IA falla
             # (hacia timeout con input_box.type()).
             page.keyboard.type(prompt, delay=8)
             page.wait_for_timeout(300)
+            # Verifica que el texto realmente entro al campo; si el foco fallo,
+            # el prompt se perderia y la respuesta nunca llegaria. En ese caso
+            # se reintenta una vez con click forzado.
+            try:
+                typed = (input_box.input_value(timeout=1000) or "").strip()
+            except Exception:
+                typed = ""
+            if not typed:
+                try:
+                    input_box.click(force=True, timeout=3000)
+                    page.keyboard.type(prompt, delay=8)
+                    page.wait_for_timeout(300)
+                except Exception:
+                    log.warning("No se pudo escribir el prompt en el Modo IA")
+                    return None
             page.keyboard.press("Enter")
 
             # No se usa un selector fijo del contenedor de respuesta (la UI de

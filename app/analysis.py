@@ -34,6 +34,26 @@ def _stat_for_market(market: str) -> str | None:
 # Poisson para seguir la misma metodologia cuantitativa que el resto.
 USES_POISSON = {"goals", "cards", "corners"}
 
+# Rangos PLAUSIBLES de la media (lambda) por partido, para futbol masculino
+# de primera division. Si la lambda calculada cae fuera de su rango, los
+# datos de origen (Google AI) son poco confiables y producirian una
+# probabilidad absurda (ej. 52% de que un equipo reciba 0 tarjetas). En ese
+# caso un apostador profesional NO apuesta ese mercado: se descarta. Hay un
+# rango para el mercado TOTAL del partido y otro para el de UN equipo.
+PLAUSIBLE_LAMBDA = {
+    ("goals", "total"): (1.0, 5.0),
+    ("goals", "team"): (0.3, 3.5),
+    ("corners", "total"): (5.0, 15.0),
+    ("corners", "team"): (1.5, 9.0),
+    ("cards", "total"): (1.5, 8.0),
+    ("cards", "team"): (0.8, 5.0),
+}
+
+
+def _lambda_is_plausible(lam: float, stat: str, is_team_market: bool) -> bool:
+    lo, hi = PLAUSIBLE_LAMBDA.get((stat, "team" if is_team_market else "total"), (0.0, 1e9))
+    return lo <= lam <= hi
+
 
 @dataclass
 class BetEvaluation:
@@ -243,6 +263,11 @@ def evaluate_match(
                         home_form, away_form, stat
                     )
         if lam is None:
+            continue
+
+        # Sanidad: si la media calculada es imposible para el mercado, los
+        # datos de origen no son fiables -> no se apuesta (no se inventa value).
+        if not _lambda_is_plausible(lam, stat, team is not None):
             continue
 
         parsed = _parse_line_value(line.selection)
