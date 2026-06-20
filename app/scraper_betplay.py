@@ -10,6 +10,7 @@ reales con el inspector del navegador si algo deja de funcionar.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 from dataclasses import dataclass, field
 
@@ -22,6 +23,8 @@ from app.config import (
     MIN_ODDS,
     VALID_COMPETITIONS_KEYWORDS,
 )
+
+log = logging.getLogger("betbot.scraper")
 
 BETPLAY_URL = "https://betplay.com.co/apuestas#starting-soon"
 
@@ -135,11 +138,20 @@ def fetch_upcoming_matches() -> list[Match]:
                 away_team=away,
                 kickoff=dt.datetime.now(dt.timezone.utc),
             )
-            if not match.is_valid_competition:
-                continue
             if (home, away) in seen_pairs:
                 continue
             seen_pairs.add((home, away))
+
+            if not match.is_valid_competition:
+                log.info(
+                    "  DESCARTADO  %-26s vs %-26s | liga: %s",
+                    home, away, competition or "(sin liga detectada)",
+                )
+                continue
+            log.info(
+                "  ANALIZANDO  %-26s vs %-26s | liga: %s",
+                home, away, competition,
+            )
 
             row = page.get_by_text(home, exact=True).first
             try:
