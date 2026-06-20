@@ -4,7 +4,7 @@ import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import football_data_provider, google_ai_provider
+from app import football_data_provider, google_search_provider
 from app.analysis import evaluate_match
 from app.config import RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
@@ -23,13 +23,13 @@ def _get_team_form_with_fallback(
     1) football-data.org (API): GOLES reales e instantaneos para las
        competiciones que cubre (mundial, ligas top). No da corners/tarjetas
        en su plan gratuito.
-    2) Google AI Mode (navegador, lento): corners, tarjetas, contexto y
-       señales; y goles cuando football-data no cubre la competicion.
+    2) Busqueda normal de Google (navegador, lento): corners, tarjetas y
+       contexto/fuentes; y goles cuando football-data no cubre la competicion.
 
-    Se COMBINAN: si football-data dio goles, se usan ESOS (mas confiables
-    que los que estima un chatbot) y de Google se toman corners/tarjetas/
-    contexto. Asi el mercado mas importante (goles) queda anclado a datos
-    reales sin sacrificar los demas mercados."""
+    Se COMBINAN: si football-data dio goles, se usan ESOS (datos oficiales,
+    mas confiables que una cifra parseada de snippets) y de Google se toman
+    corners/tarjetas. Asi el mercado mas importante (goles) queda anclado a
+    datos reales sin sacrificar los demas mercados."""
     fd_form: TeamForm | None = None
     try:
         fd_form = football_data_provider.get_team_form(
@@ -42,11 +42,11 @@ def _get_team_form_with_fallback(
     fd_goals_against = fd_form.average("goals_against") if fd_form else None
 
     try:
-        g_form = google_ai_provider.get_team_form(
+        g_form = google_search_provider.get_team_form(
             team_name, venue=venue, is_national_team=is_national_team
         )
     except Exception:
-        log.exception("Fallo consultando Google AI para %s", team_name)
+        log.exception("Fallo consultando Google para %s", team_name)
         g_form = None
 
     # Caso ideal: ambas fuentes. Goles reales de football-data por encima del
