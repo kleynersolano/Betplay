@@ -110,9 +110,10 @@ def _collect_sources(page, limit: int = 4) -> list[str]:
 
 
 def _extract_avg(text: str, lo: float, hi: float) -> float | None:
-    """Extrae el promedio del texto visible: toma todos los numeros
-    decimales dentro del rango plausible y devuelve la MEDIANA (mas robusta
-    que el promedio frente a un dato atipico que se haya colado)."""
+    """Extrae el promedio del texto visible: toma todas las cifras que dieron
+    las distintas fuentes (numeros dentro del rango plausible) y las PROMEDIA
+    (suma / cantidad), tal como se pidio. Ej: si las fuentes dicen 3, 4, 5, 3,
+    4 -> (3+4+5+3+4)/5 = 3.8."""
     cands: list[float] = []
     for m in _NUM_RE.finditer(text):
         try:
@@ -123,7 +124,7 @@ def _extract_avg(text: str, lo: float, hi: float) -> float | None:
             cands.append(v)
     if not cands:
         return None
-    return round(statistics.median(cands), 2)
+    return round(statistics.mean(cands), 2)
 
 
 def _search(page, query: str) -> tuple[str, list[str], bool]:
