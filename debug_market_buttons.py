@@ -94,5 +94,29 @@ with sync_playwright() as p:
         except Exception as e:
             print(f"ERROR: {e}")
 
+        print("\n--- Subiendo por ancestros hasta encontrar uno que incluya 'Más de'/'Menos de' ---")
+        handle = heading.element_handle()
+        result = page.evaluate(
+            """(el) => {
+                let cur = el;
+                let depth = 0;
+                while (cur && depth < 12) {
+                    const text = cur.innerText || '';
+                    if (text.includes('Más de') || text.includes('Menos de')) {
+                        return {depth, tag: cur.tagName, cls: (cur.className||'').toString().slice(0,80), text};
+                    }
+                    cur = cur.parentElement;
+                    depth++;
+                }
+                return null;
+            }""",
+            handle,
+        )
+        if result:
+            print(f"depth={result['depth']} tag={result['tag']} cls={result['cls']!r}")
+            print(repr(result["text"]))
+        else:
+            print("No se encontro ningun ancestro (hasta 12 niveles) con 'Más de'/'Menos de'.")
+
     input("\n[ENTER para cerrar el navegador]")
     browser.close()
