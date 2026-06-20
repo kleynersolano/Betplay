@@ -58,6 +58,32 @@ class Match:
         return any(kw in comp for kw in NATIONAL_TEAM_COMPETITION_KEYWORDS)
 
 
+_MATCH_LOADED_RE = re.compile(
+    r"Resultado Final|^Total de (Tiros de Esquina|goles|tarjetas)", re.I | re.M
+)
+
+
+def _wait_for_match_page(page, timeout_ms: int = 20_000, poll_ms: int = 700) -> bool:
+    """El widget de cuotas (Kambi) tarda en cargar/hidratar tras entrar a un
+    partido; en pruebas reales 4-8 segundos no fueron suficientes. Se
+    sondea el texto visible repetidamente, scrolleando un poco en cada
+    intento, hasta que aparezca contenido de partido cargado o se agote
+    el tiempo."""
+    elapsed = 0
+    body = page.locator("body")
+    while elapsed < timeout_ms:
+        try:
+            text = body.inner_text(timeout=2000)
+        except Exception:
+            text = ""
+        if _MATCH_LOADED_RE.search(text):
+            return True
+        page.mouse.wheel(0, 400)
+        page.wait_for_timeout(poll_ms)
+        elapsed += poll_ms
+    return False
+
+
 def _click_text(page, pattern: str, exact: bool = False) -> bool:
     locator = page.locator(f"text=/^({pattern})$/i") if exact else page.locator(f"text=/{pattern}/i")
     if locator.count() == 0:
@@ -162,13 +188,8 @@ def fetch_upcoming_matches() -> list[Match]:
             except Exception:
                 log.warning("  No se pudo entrar al partido %s vs %s", home, away)
                 continue
-            try:
-                page.get_by_text(re.compile("Resultado Final", re.I)).first.wait_for(
-                    state="visible", timeout=8000
-                )
-            except Exception:
+            if not _wait_for_match_page(page):
                 log.warning("  La pagina del partido %s vs %s no termino de cargar", home, away)
-            page.wait_for_timeout(500)
             match.lines = _extract_market_lines(page)
             log.info("  -> %d cuotas extraidas", len(match.lines))
             matches.append(match)
@@ -223,16 +244,17 @@ _MARKET_HEADING_RE = re.compile(r"^Total de (Tiros de Esquina|goles|tarjetas)", 
 _ROW_RE = re.compile(r"^(M[aá]s de|Menos de)\s*([\d.,]+)\s+([\d.,]+)$", re.I)
 
 
-def _scroll_into_markets(page, max_scrolls: int = 20) -> None:
+def _scroll_into_markets(page, max_scrolls: int = 40) -> None:
     """La pagina de detalle del partido tambien virtualiza secciones: los
     mercados 'Total de goles/tarjetas/Tiros de Esquina' no entran al DOM
-    hasta que se scrollea hacia ellos. Se scrollea hasta que aparezca al
-    menos un encabezado de mercado o se agoten los intentos."""
+    hasta que se scrollea hacia ellos, y el widget de cuotas puede tardar
+    en cargar. Se scrollea hasta que aparezca al menos un encabezado de
+    mercado o se agoten los intentos."""
     for _ in range(max_scrolls):
         if page.locator("text=/^Total de (Tiros de Esquina|goles|tarjetas)/i").count() > 0:
             return
         page.mouse.wheel(0, 700)
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(500)
 
 
 def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
