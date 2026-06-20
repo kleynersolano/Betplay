@@ -7,6 +7,8 @@ API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 
 def send_message(text: str) -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
     requests.post(
         API_URL,
         json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
@@ -34,4 +36,5 @@ def format_evaluations(evaluations: list[BetEvaluation]) -> str:
 def notify_match_results(evaluations: list[BetEvaluation]) -> None:
     text = format_evaluations(evaluations)
     if text:
+        print("\n" + text + "\n")
         send_message(text)

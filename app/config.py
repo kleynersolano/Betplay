@@ -4,15 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _required(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Falta variable de entorno requerida: {name}")
-    return value
-
-
-TELEGRAM_BOT_TOKEN = _required("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = _required("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
 
 # Segunda fuente gratuita de respaldo (https://www.football-data.org/, registro gratis).
