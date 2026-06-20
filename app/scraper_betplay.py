@@ -68,10 +68,6 @@ _BULK_EXTRACT_JS = """
     const headers = [];
     const teams = [];
     const seen = new Set();
-    // Encabezados de liga: texto tipo 'Futbol / Pais / Liga'. NO son nodos
-    // hoja (suelen llevar un icono hijo), asi que se filtran por: una sola
-    // linea, corto, y que empiece por 'Futbol /'. Se deduplica por texto+y
-    // para descartar el ancestro repetido.
     document.querySelectorAll('*').forEach(el => {
         const text = (el.innerText || '').trim();
         if (!text || text.length > 80 || text.indexOf('\\n') !== -1) return;
@@ -86,52 +82,16 @@ _BULK_EXTRACT_JS = """
     });
     document.querySelectorAll('.KambiBC-event-participants__name-participant-name').forEach(el => {
         const rect = el.getBoundingClientRect();
-        teams.push({y: rect.top + window.scrollY, text: (el.innerText || '').trim()});
+        teams.push({
+            y: rect.top + window.scrollY,
+            vx: rect.left + rect.width / 2,
+            vy: rect.top + rect.height / 2,
+            text: (el.innerText || '').trim(),
+        });
     });
     return {headers, teams};
 }
 """
-
-
-def _scroll_and_collect(page, max_scrolls: int = 60):
-    """BetPlay (Kambi) VIRTUALIZA la lista: solo mantiene en el DOM las filas
-    visibles, asi que extraer todo de una vez tras scrollear pierde las filas
-    de arriba (ya descargadas). Por eso se extrae en CADA paso de scroll y se
-    acumula, deduplicando por la Y absoluta del documento (estable por
-    elemento) + texto."""
-    headers: dict[tuple[int, str], float] = {}
-    teams: dict[tuple[int, str], float] = {}
-
-    def harvest():
-        data = page.evaluate(_BULK_EXTRACT_JS)
-        for h in data["headers"]:
-            headers[(round(h["y"]), h["text"])] = h["y"]
-        for t in data["teams"]:
-            if t["text"]:
-                teams[(round(t["y"]), t["text"])] = t["y"]
-
-    harvest()
-    previous_height = -1
-    stable = 0
-    for _ in range(max_scrolls):
-        current_height = page.evaluate("document.body.scrollHeight")
-        page.mouse.wheel(0, 1200)
-        page.wait_for_timeout(450)
-        harvest()
-        if current_height == previous_height:
-            stable += 1
-            if stable >= 3:
-                break
-        else:
-            stable = 0
-        previous_height = current_height
-
-    header_positions = sorted((y, key[1]) for key, y in headers.items())
-    teams_sorted = [
-        {"y": y, "text": key[1]}
-        for key, y in sorted(teams.items(), key=lambda kv: kv[1])
-    ]
-    return header_positions, teams_sorted
 
 
 def fetch_upcoming_matches() -> list[Match]:
@@ -139,30 +99,37 @@ def fetch_upcoming_matches() -> list[Match]:
     devuelve los partidos listados (ya filtrados por competicion valida).
     Como la pestana de horas (ej. '4 horas') ya filtra el listado del lado del
     sitio, no se vuelve a filtrar por hora aqui.
-    La extraccion de equipos y encabezados de liga (texto 'Futbol / Pais /
-    Liga') se hace de una sola vez con JS (page.evaluate) para evitar miles
-    de llamadas individuales de Playwright, que eran el cuello de botella."""
+
+    BetPlay (Kambi) VIRTUALIZA la lista: solo mantiene en el DOM las filas
+    visibles, y reutiliza esos mismos nodos para mostrar otro partido al
+    scrollear. Por eso NO se puede juntar todo el listado primero y procesar
+    despues (las posiciones quedarian mezcladas entre partidos distintos).
+    En vez de eso, en cada paso de scroll se extrae lo que esta visible AHORA
+    y se entra de inmediato a los partidos validos nuevos, mientras la fila
+    todavia esta en el DOM. El clic se hace por coordenadas de pantalla
+    (mouse.click) en vez de buscar por texto, porque nombres de equipo como
+    "Países Bajos" se repiten muchas veces (esports) y un buscador por texto
+    podria clicar la fila equivocada."""
     matches: list[Match] = []
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
-        page = browser.new_page()
-        page.goto(BETPLAY_URL, wait_until="networkidle", timeout=60_000)
-        page.wait_for_timeout(2000)
+    seen_pairs: set[tuple[str, str]] = set()
+    header_positions: list[tuple[float, str]] = []
 
-        _click_text(page, "Football|F[uú]tbol", exact=True)
-        page.wait_for_timeout(800)
-        _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
-        page.wait_for_timeout(1000)
+    def harvest_and_process(page) -> None:
+        data = page.evaluate(_BULK_EXTRACT_JS)
+        for h in data["headers"]:
+            entry = (h["y"], h["text"])
+            if entry not in header_positions:
+                header_positions.append(entry)
+        header_positions.sort(key=lambda e: e[0])
 
-        header_positions, teams = _scroll_and_collect(page)
-
-        seen_pairs: set[tuple[str, str]] = set()
+        teams = data["teams"]
         for i in range(0, len(teams) - 1, 2):
             home, away = teams[i]["text"], teams[i + 1]["text"]
-            y = teams[i]["y"]
-            if not home or not away:
+            if not home or not away or (home, away) in seen_pairs:
                 continue
+            seen_pairs.add((home, away))
 
+            y = teams[i]["y"]
             competition = ""
             for header_y, text in header_positions:
                 if header_y <= y + 5:
@@ -176,26 +143,16 @@ def fetch_upcoming_matches() -> list[Match]:
                 away_team=away,
                 kickoff=dt.datetime.now(dt.timezone.utc),
             )
-            if (home, away) in seen_pairs:
-                continue
-            seen_pairs.add((home, away))
-
             if not match.is_valid_competition:
                 log.info(
                     "  DESCARTADO  %-26s vs %-26s | liga: %s",
                     home, away, competition or "(sin liga detectada)",
                 )
                 continue
-            log.info(
-                "  ANALIZANDO  %-26s vs %-26s | liga: %s",
-                home, away, competition,
-            )
+            log.info("  ANALIZANDO  %-26s vs %-26s | liga: %s", home, away, competition)
 
             try:
-                row = page.get_by_text(home, exact=True).first
-                row.scroll_into_view_if_needed(timeout=4000)
-                page.wait_for_timeout(300)
-                row.locator("xpath=ancestor::*[4]").first.click(timeout=4000)
+                page.mouse.click(teams[i]["vx"], teams[i]["vy"])
             except Exception:
                 log.warning("  No se pudo entrar al partido %s vs %s", home, away)
                 continue
@@ -204,9 +161,34 @@ def fetch_upcoming_matches() -> list[Match]:
             log.info("  -> %d cuotas extraidas", len(match.lines))
             matches.append(match)
             page.go_back(timeout=10_000)
-            page.wait_for_timeout(1500)
-            page.evaluate("window.scrollTo(0, 0)")
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(1200)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
+        page = browser.new_page()
+        page.goto(BETPLAY_URL, wait_until="networkidle", timeout=60_000)
+        page.wait_for_timeout(2000)
+
+        _click_text(page, "Football|F[uú]tbol", exact=True)
+        page.wait_for_timeout(800)
+        _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
+        page.wait_for_timeout(1000)
+
+        harvest_and_process(page)
+        previous_height = -1
+        stable = 0
+        for _ in range(60):
+            current_height = page.evaluate("document.body.scrollHeight")
+            page.mouse.wheel(0, 1200)
+            page.wait_for_timeout(350)
+            harvest_and_process(page)
+            if current_height == previous_height:
+                stable += 1
+                if stable >= 3:
+                    break
+            else:
+                stable = 0
+            previous_height = current_height
 
         browser.close()
     return matches
