@@ -4,7 +4,7 @@ Plan gratuito: https://www.api-football.com/ (registro gratis, 100 req/dia).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -40,12 +40,21 @@ class TeamForm:
     must_win: bool = False
     role: str = "neutral"
     key_attacker_out: bool = False
+    # Promedios que vienen de OTRA fuente (ej. goles confiables de
+    # football-data.org mientras corners/tarjetas vienen de Google). Si una
+    # estadistica esta aqui, average() la devuelve directo sin mirar samples.
+    overrides: dict[str, float] = field(default_factory=dict)
 
     @property
     def valid(self) -> bool:
-        return len(self.samples) >= MIN_VALID_MATCHES
+        # Es valido si tiene suficientes muestras propias O si tiene goles
+        # de una fuente externa confiable (caso football-data: goles via
+        # override aunque corners/tarjetas falten).
+        return len(self.samples) >= MIN_VALID_MATCHES or "goals" in self.overrides
 
     def average(self, attr: str) -> float | None:
+        if attr in self.overrides:
+            return self.overrides[attr]
         values = [getattr(s, attr) for s in self.samples if getattr(s, attr) is not None]
         if len(values) < MIN_VALID_MATCHES:
             return None

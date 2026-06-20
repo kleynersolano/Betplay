@@ -2,7 +2,7 @@ import logging
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import google_ai_provider
+from app import football_data_provider, google_ai_provider
 from app.analysis import evaluate_match
 from app.config import RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
@@ -12,28 +12,57 @@ from app.telegram_notifier import notify_match_results, send_message
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("betbot")
 
-# Por ahora solo se usa Google AI Mode como fuente de estadisticas (a pedido
-# explicito, mientras se valida que el bot funcione de punta a punta). Para
-# reactivar API-Football y football-data.org como fuentes previas, agregar
-# get_team_form (de app.stats_provider) y football_data_provider.get_team_form
-# al inicio de esta lista.
-STAT_PROVIDERS = [google_ai_provider.get_team_form]
-
 
 def _get_team_form_with_fallback(
     team_name: str, venue: str, is_national_team: bool = False
 ) -> TeamForm | None:
-    best: TeamForm | None = None
-    for provider in STAT_PROVIDERS:
-        try:
-            form = provider(team_name, venue=venue, is_national_team=is_national_team)
-        except Exception:
-            log.exception("Fallo consultando %s para %s", provider.__module__, team_name)
-            continue
-        if form is not None and form.valid:
-            return form
-        best = best or form
-    return best
+    """Estrategia de datos: rapida, real y confiable primero.
+
+    1) football-data.org (API): GOLES reales e instantaneos para las
+       competiciones que cubre (mundial, ligas top). No da corners/tarjetas
+       en su plan gratuito.
+    2) Google AI Mode (navegador, lento): corners, tarjetas, contexto y
+       señales; y goles cuando football-data no cubre la competicion.
+
+    Se COMBINAN: si football-data dio goles, se usan ESOS (mas confiables
+    que los que estima un chatbot) y de Google se toman corners/tarjetas/
+    contexto. Asi el mercado mas importante (goles) queda anclado a datos
+    reales sin sacrificar los demas mercados."""
+    fd_form: TeamForm | None = None
+    try:
+        fd_form = football_data_provider.get_team_form(
+            team_name, venue=venue, is_national_team=is_national_team
+        )
+    except Exception:
+        log.exception("Fallo consultando football-data para %s", team_name)
+
+    fd_goals = fd_form.average("goals") if fd_form else None
+    fd_goals_against = fd_form.average("goals_against") if fd_form else None
+
+    try:
+        g_form = google_ai_provider.get_team_form(
+            team_name, venue=venue, is_national_team=is_national_team
+        )
+    except Exception:
+        log.exception("Fallo consultando Google AI para %s", team_name)
+        g_form = None
+
+    # Caso ideal: ambas fuentes. Goles reales de football-data por encima del
+    # resto (corners/tarjetas/contexto) de Google.
+    if g_form is not None:
+        if fd_goals is not None:
+            g_form.overrides["goals"] = fd_goals
+            if fd_goals_against is not None:
+                g_form.overrides["goals_against"] = fd_goals_against
+            log.info("    %s: goles via football-data, resto via Google", team_name)
+        return g_form
+
+    # Google fallo: si football-data dio goles, se usa eso (solo serviran los
+    # mercados de goles; corners/tarjetas se descartan por falta de datos).
+    if fd_form is not None and fd_form.valid:
+        log.info("    %s: solo football-data (sin Google)", team_name)
+        return fd_form
+    return None
 
 
 def run_cycle() -> None:
