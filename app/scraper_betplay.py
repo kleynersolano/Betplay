@@ -63,24 +63,44 @@ _MATCH_LOADED_RE = re.compile(
 )
 
 
+_STALL_RELOAD_MS = 60_000  # si en 60s no carga, se asume trabada y se recarga (F5)
+_MAX_RELOADS = 2  # tope de recargas antes de rendirse y dejar el partido/listado como fallido
+
+
 def _wait_for_match_page(page, timeout_ms: int = 20_000, poll_ms: int = 700) -> bool:
     """El widget de cuotas (Kambi) tarda en cargar/hidratar tras entrar a un
     partido; en pruebas reales 4-8 segundos no fueron suficientes. Se
     sondea el texto visible repetidamente, scrolleando un poco en cada
     intento, hasta que aparezca contenido de partido cargado o se agote
-    el tiempo."""
+    el tiempo. Si la pagina queda trabada (60s sin cargar nada util,
+    sintoma visto en pruebas reales cuando el equipo se sobrecarga), se
+    fuerza un refresh (F5) e se le da otra oportunidad antes de rendirse."""
     elapsed = 0
+    reloads = 0
+    stall_elapsed = 0
     body = page.locator("body")
-    while elapsed < timeout_ms:
+    while elapsed < timeout_ms or reloads < _MAX_RELOADS:
         try:
             text = body.inner_text(timeout=2000)
         except Exception:
             text = ""
         if _MATCH_LOADED_RE.search(text):
             return True
+        if stall_elapsed >= _STALL_RELOAD_MS and reloads < _MAX_RELOADS:
+            log.warning("  Pagina del partido trabada %ds, recargando (F5)...", stall_elapsed // 1000)
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30_000)
+            except Exception:
+                pass
+            reloads += 1
+            stall_elapsed = 0
+            elapsed = 0
+            page.wait_for_timeout(1500)
+            continue
         page.evaluate("window.scrollBy(0, 400)")
         page.wait_for_timeout(poll_ms)
         elapsed += poll_ms
+        stall_elapsed += poll_ms
     return False
 
 
@@ -89,14 +109,24 @@ def _wait_for_listing(page, timeout_ms: int = 30_000) -> bool:
     contenido real antes de seguir. 'load'/'networkidle' no garantizan que
     el listado ya se haya pintado; en pruebas reales, seguir sin esto
     causaba que el filtro de Football/horas nunca se clickeara (el ciclo
-    terminaba en segundos con 0 partidos)."""
-    try:
-        page.locator(".KambiBC-event-participants__name-participant-name").first.wait_for(
-            state="visible", timeout=timeout_ms
-        )
-        return True
-    except Exception:
-        return False
+    terminaba en segundos con 0 partidos). Si el listado nunca llega a
+    cargar (pagina trabada por sobrecarga del equipo), se recarga (F5) y
+    se reintenta antes de rendirse."""
+    for attempt in range(1 + _MAX_RELOADS):
+        try:
+            page.locator(".KambiBC-event-participants__name-participant-name").first.wait_for(
+                state="visible", timeout=_STALL_RELOAD_MS if attempt == 0 else timeout_ms
+            )
+            return True
+        except Exception:
+            if attempt < _MAX_RELOADS:
+                log.warning("  Listado trabado, recargando (F5)...")
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=30_000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1500)
+    return False
 
 
 def _click_text(page, pattern: str, exact: bool = False) -> bool:

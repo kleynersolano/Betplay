@@ -137,7 +137,11 @@ def _input_center(page, locator) -> tuple[int, int]:
     return (viewport["width"] // 2, viewport["height"] // 2)
 
 
-def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 30_000) -> str | None:
+_STALL_RELOAD_MS = 60_000  # si en 60s no carga/responde, se asume trabado y se recarga (F5)
+_MAX_RELOADS = 1  # tope de recargas antes de rendirse con este equipo
+
+
+def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 90_000) -> str | None:
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             GOOGLE_AI_PROFILE_DIR,
@@ -145,84 +149,115 @@ def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 30_000) -> str | None:
         )
         try:
             page = context.new_page()
-            page.goto(GOOGLE_AI_URL, wait_until="domcontentloaded", timeout=60_000)
-            page.wait_for_timeout(2500)
-            input_box = _find_input(page)
-            if input_box is None:
-                log.warning("No se encontro el campo de texto del Modo IA")
-                return None
-
-            def _typed_text() -> str:
-                # input_value() solo funciona en <textarea>/<input>; el Modo IA
-                # a veces usa un div contenteditable, donde input_value()
-                # lanza error aunque el texto SI haya entrado. text_content()
-                # cubre ambos casos.
-                try:
-                    val = input_box.input_value(timeout=800)
-                    if val:
-                        return val.strip()
-                except Exception:
-                    pass
-                try:
-                    return (input_box.text_content(timeout=800) or "").strip()
-                except Exception:
-                    return ""
-
-            # Se intentan varias estrategias de foco/escritura en orden, cada
-            # una mas agresiva que la anterior, porque ninguna sola resulto
-            # confiable en pruebas reales: el autofocus a veces no alcanza, el
-            # click normal de Playwright exige "accionabilidad" que el
-            # textarea del Modo IA no siempre cumple (timeout de 30s), y el
-            # click forzado por si solo no garantiza que el foco quede en el
-            # elemento correcto. Se verifica el texto realmente escrito tras
-            # cada intento antes de pasar al siguiente.
-            strategies = [
-                lambda: input_box.evaluate("el => el.focus()"),
-                lambda: input_box.click(timeout=3000),
-                lambda: input_box.click(force=True, timeout=3000),
-                lambda: page.mouse.click(*_input_center(page, input_box)),
-            ]
-            typed = ""
-            for strategy in strategies:
-                try:
-                    strategy()
-                except Exception:
-                    pass
-                page.wait_for_timeout(200)
-                try:
-                    input_box.evaluate("el => { el.value !== undefined ? el.value = '' : el.textContent = ''; }")
-                except Exception:
-                    pass
-                page.keyboard.type(prompt, delay=8)
-                page.wait_for_timeout(300)
-                typed = _typed_text()
-                if typed:
-                    break
-            if not typed:
-                log.warning("No se pudo escribir el prompt en el Modo IA")
-                return None
-            page.keyboard.press("Enter")
-
-            # No se usa un selector fijo del contenedor de respuesta (la UI de
-            # Google cambia seguido y nunca se confirmo contra el DOM real).
-            # En vez de eso se espera a que el JSON pedido ("signals" aparezca
-            # en cualquier parte del texto visible de la pagina, sondeando.
-            elapsed = 0
-            poll_ms = 1500
-            body = page.locator("body")
-            while elapsed < max_wait_ms:
-                page.wait_for_timeout(poll_ms)
-                elapsed += poll_ms
-                try:
-                    text = body.inner_text(timeout=2000)
-                except Exception:
-                    continue
-                if '"signals"' in text:
-                    return text
-            log.warning("Timeout esperando respuesta del Modo IA (no aparecio el JSON)")
+            for attempt in range(1 + _MAX_RELOADS):
+                result = _ask_once(page, prompt, max_wait_ms)
+                if result is not None:
+                    return result
+                if attempt < _MAX_RELOADS:
+                    log.warning("Modo IA trabado, recargando (F5) y reintentando...")
             return None
         finally:
             context.close()
+
+
+def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
+    """Un intento completo: navega, escribe el prompt y espera la respuesta.
+    Si la pagina queda trabada 60s sin avanzar (sintoma visto en pruebas
+    reales cuando el equipo se sobrecarga), se hace un refresh (F5) y se
+    devuelve None para que el llamador reintente desde cero con la pagina
+    ya recargada."""
+    try:
+        page.goto(GOOGLE_AI_URL, wait_until="domcontentloaded", timeout=60_000)
+    except Exception:
+        log.warning("La pagina del Modo IA no cargo, recargando...")
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=30_000)
+        except Exception:
+            pass
+    page.wait_for_timeout(2500)
+    input_box = _find_input(page)
+    if input_box is None:
+        log.warning("No se encontro el campo de texto del Modo IA")
+        return None
+
+    def _typed_text() -> str:
+        # input_value() solo funciona en <textarea>/<input>; el Modo IA
+        # a veces usa un div contenteditable, donde input_value()
+        # lanza error aunque el texto SI haya entrado. text_content()
+        # cubre ambos casos.
+        try:
+            val = input_box.input_value(timeout=800)
+            if val:
+                return val.strip()
+        except Exception:
+            pass
+        try:
+            return (input_box.text_content(timeout=800) or "").strip()
+        except Exception:
+            return ""
+
+    # Se intentan varias estrategias de foco/escritura en orden, cada
+    # una mas agresiva que la anterior, porque ninguna sola resulto
+    # confiable en pruebas reales: el autofocus a veces no alcanza, el
+    # click normal de Playwright exige "accionabilidad" que el
+    # textarea del Modo IA no siempre cumple (timeout de 30s), y el
+    # click forzado por si solo no garantiza que el foco quede en el
+    # elemento correcto. Se verifica el texto realmente escrito tras
+    # cada intento antes de pasar al siguiente.
+    strategies = [
+        lambda: input_box.evaluate("el => el.focus()"),
+        lambda: input_box.click(timeout=3000),
+        lambda: input_box.click(force=True, timeout=3000),
+        lambda: page.mouse.click(*_input_center(page, input_box)),
+    ]
+    typed = ""
+    for strategy in strategies:
+        try:
+            strategy()
+        except Exception:
+            pass
+        page.wait_for_timeout(200)
+        try:
+            input_box.evaluate("el => { el.value !== undefined ? el.value = '' : el.textContent = ''; }")
+        except Exception:
+            pass
+        page.keyboard.type(prompt, delay=8)
+        page.wait_for_timeout(300)
+        typed = _typed_text()
+        if typed:
+            break
+    if not typed:
+        log.warning("No se pudo escribir el prompt en el Modo IA")
+        return None
+    page.keyboard.press("Enter")
+
+    # No se usa un selector fijo del contenedor de respuesta (la UI de
+    # Google cambia seguido y nunca se confirmo contra el DOM real).
+    # En vez de eso se espera a que el JSON pedido ("signals" aparezca
+    # en cualquier parte del texto visible de la pagina, sondeando. Si
+    # pasan 60s sin respuesta se asume que la pagina/el equipo esta
+    # trabado y se recarga (F5) en vez de seguir esperando indefinidamente.
+    elapsed = 0
+    poll_ms = 1500
+    body = page.locator("body")
+    while elapsed < max_wait_ms:
+        page.wait_for_timeout(poll_ms)
+        elapsed += poll_ms
+        try:
+            text = body.inner_text(timeout=2000)
+        except Exception:
+            continue
+        if '"signals"' in text:
+            return text
+        if elapsed >= _STALL_RELOAD_MS:
+            log.warning("Modo IA trabado %ds sin responder, se recargara (F5)", elapsed // 1000)
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30_000)
+            except Exception:
+                pass
+            return None
+    log.warning("Timeout esperando respuesta del Modo IA (no aparecio el JSON)")
+    return None
 
 
 def _to_float(value) -> float | None:
