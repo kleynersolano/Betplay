@@ -292,7 +292,13 @@ def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
             market_name = heading.inner_text(timeout=1000).strip()
         except Exception:
             continue
-        container = heading.locator("xpath=following-sibling::*[1]")
+        # El heading no tiene un following-sibling util: en el DOM real de
+        # Kambi, heading y filas viven dentro de un ancestro comun con la
+        # clase 'KambiBC-bet-offer-subcategory__container' (confirmado
+        # inspeccionando el DOM real con Playwright).
+        container = heading.locator(
+            "xpath=ancestor::*[contains(@class,'KambiBC-bet-offer-subcategory__container')][1]"
+        )
         if container.count() == 0:
             continue
         show_list = container.first.locator("text=/Mostrar la lista|Ver m[aá]s/i").first
