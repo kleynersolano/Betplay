@@ -200,7 +200,15 @@ def fetch_upcoming_matches() -> list[Match]:
             log.info("  ANALIZANDO  %-26s vs %-26s | liga: %s", home, away, competition)
 
             try:
-                page.mouse.click(teams[i]["vx"], teams[i]["vy"])
+                # Antes se usaba page.mouse.click(vx, vy) por coordenadas:
+                # en pruebas reales fallaba en silencio (no lanzaba error,
+                # pero tampoco entraba al partido) cuando algo tapaba esa
+                # posicion en pantalla (ej. la barra de filtros pegajosa).
+                # locator.click() si verifica que el elemento sea visible y
+                # no este tapado antes de clickear, y lanza error si no.
+                page.locator(
+                    ".KambiBC-event-participants__name-participant-name"
+                ).nth(i).click(timeout=5000)
             except Exception:
                 log.warning("  No se pudo entrar al partido %s vs %s", home, away)
                 continue
