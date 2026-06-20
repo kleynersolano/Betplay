@@ -114,21 +114,40 @@ def _match_context_factor(home_form: TeamForm, away_form: TeamForm, stat: str) -
     return max(0.85, min(1.15, factor))
 
 
-def _goals_lambda(home_form: TeamForm, away_form: TeamForm) -> float | None:
-    """Lambda de goles totales del partido = goles esperados de cada equipo,
-    donde lo esperado de un equipo es el promedio de (sus goles anotados,
-    los goles que concede su rival), siguiendo la metodologia pedida:
-    'goles promedio equipo + goles concedidos promedio contrario / 2'.
-    Cada lado se ajusta por su propio contexto (must_win, rol, bajas)."""
-    home_for = home_form.average("goals")
-    away_against = away_form.average("goals_against")
-    away_for = away_form.average("goals")
-    home_against = home_form.average("goals_against")
-    if None in (home_for, away_against, away_for, home_against):
+def _team_goals_expected(team_form: TeamForm, opponent_form: TeamForm) -> float | None:
+    """Goles esperados de UN equipo = promedio de (sus goles anotados, los
+    goles que concede su rival), ajustado por su propio contexto."""
+    team_for = team_form.average("goals")
+    opponent_against = opponent_form.average("goals_against")
+    if team_for is None or opponent_against is None:
         return None
-    home_expected = (home_for + away_against) / 2 * _team_goals_factor(home_form)
-    away_expected = (away_for + home_against) / 2 * _team_goals_factor(away_form)
+    return (team_for + opponent_against) / 2 * _team_goals_factor(team_form)
+
+
+def _goals_lambda(home_form: TeamForm, away_form: TeamForm) -> float | None:
+    """Lambda de goles TOTALES del partido (ambos equipos)."""
+    home_expected = _team_goals_expected(home_form, away_form)
+    away_expected = _team_goals_expected(away_form, home_form)
+    if home_expected is None or away_expected is None:
+        return None
     return home_expected + away_expected
+
+
+def _market_team(market: str, home_team: str, away_team: str) -> str | None:
+    """Detecta si un mercado es POR EQUIPO (ej. 'Total de goles de Curacao',
+    'Total de tarjetas - Ecuador', 'Tiros de Esquina a favor de Ecuador') y
+    de cual de los dos equipos del partido se trata. Devuelve 'home',
+    'away' o None si el mercado es del TOTAL del partido (ningun equipo
+    mencionado). Esto es critico: aplicar la lambda del partido completo a
+    un mercado de un solo equipo infla la probabilidad real de forma
+    masiva (se vio en produccion: value%>500 en 'Total de goles de
+    Curacao')."""
+    m = market.lower()
+    if home_team.lower() in m:
+        return "home"
+    if away_team.lower() in m:
+        return "away"
+    return None
 
 
 def _implied_prob(odds: float) -> float:
@@ -155,18 +174,37 @@ def evaluate_match(
         if stat is None:
             continue
 
+        team = _market_team(line.market, match.home_team, match.away_team)
+
         if stat == "goals":
-            # _goals_lambda ya aplica el contexto por equipo.
-            lam = _goals_lambda(home_form, away_form)
-        else:
-            home_avg = home_form.average(stat)
-            away_avg = away_form.average(stat)
-            if home_avg is None or away_avg is None:
-                lam = None
+            if team == "home":
+                lam = _team_goals_expected(home_form, away_form)
+            elif team == "away":
+                lam = _team_goals_expected(away_form, home_form)
             else:
-                lam = _combined_lambda(home_avg, away_avg) * _match_context_factor(
-                    home_form, away_form, stat
+                lam = _goals_lambda(home_form, away_form)
+        else:
+            if team == "home":
+                team_avg = home_form.average(stat)
+                lam = (
+                    None if team_avg is None
+                    else team_avg * _match_context_factor(home_form, away_form, stat)
                 )
+            elif team == "away":
+                team_avg = away_form.average(stat)
+                lam = (
+                    None if team_avg is None
+                    else team_avg * _match_context_factor(home_form, away_form, stat)
+                )
+            else:
+                home_avg = home_form.average(stat)
+                away_avg = away_form.average(stat)
+                if home_avg is None or away_avg is None:
+                    lam = None
+                else:
+                    lam = _combined_lambda(home_avg, away_avg) * _match_context_factor(
+                        home_form, away_form, stat
+                    )
         if lam is None:
             continue
 
