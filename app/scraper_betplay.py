@@ -93,6 +93,47 @@ _BULK_EXTRACT_JS = """
 """
 
 
+def _scroll_and_collect(page, max_scrolls: int = 60):
+    """BetPlay (Kambi) VIRTUALIZA la lista: solo mantiene en el DOM las filas
+    visibles, asi que extraer todo de una vez tras scrollear pierde las filas
+    de arriba (ya descargadas). Por eso se extrae en CADA paso de scroll y se
+    acumula, deduplicando por la Y absoluta del documento (estable por
+    elemento) + texto."""
+    headers: dict[tuple[int, str], float] = {}
+    teams: dict[tuple[int, str], float] = {}
+
+    def harvest():
+        data = page.evaluate(_BULK_EXTRACT_JS)
+        for h in data["headers"]:
+            headers[(round(h["y"]), h["text"])] = h["y"]
+        for t in data["teams"]:
+            if t["text"]:
+                teams[(round(t["y"]), t["text"])] = t["y"]
+
+    harvest()
+    previous_height = -1
+    stable = 0
+    for _ in range(max_scrolls):
+        current_height = page.evaluate("document.body.scrollHeight")
+        page.mouse.wheel(0, 1200)
+        page.wait_for_timeout(450)
+        harvest()
+        if current_height == previous_height:
+            stable += 1
+            if stable >= 3:
+                break
+        else:
+            stable = 0
+        previous_height = current_height
+
+    header_positions = sorted((y, key[1]) for key, y in headers.items())
+    teams_sorted = [
+        {"y": y, "text": key[1]}
+        for key, y in sorted(teams.items(), key=lambda kv: kv[1])
+    ]
+    return header_positions, teams_sorted
+
+
 def fetch_upcoming_matches() -> list[Match]:
     """Abre BetPlay 'starting-soon', selecciona Football + ventana de horas y
     devuelve los partidos listados (ya filtrados por competicion valida).
@@ -112,11 +153,8 @@ def fetch_upcoming_matches() -> list[Match]:
         page.wait_for_timeout(800)
         _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
         page.wait_for_timeout(1000)
-        _scroll_to_bottom(page)
 
-        data = page.evaluate(_BULK_EXTRACT_JS)
-        header_positions = sorted((h["y"], h["text"]) for h in data["headers"])
-        teams = data["teams"]
+        header_positions, teams = _scroll_and_collect(page)
 
         seen_pairs: set[tuple[str, str]] = set()
         for i in range(0, len(teams) - 1, 2):
@@ -167,7 +205,8 @@ def fetch_upcoming_matches() -> list[Match]:
             matches.append(match)
             page.go_back(timeout=10_000)
             page.wait_for_timeout(1500)
-            _scroll_to_bottom(page)
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(500)
 
         browser.close()
     return matches
