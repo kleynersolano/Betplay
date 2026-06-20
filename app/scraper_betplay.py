@@ -78,7 +78,7 @@ def _wait_for_match_page(page, timeout_ms: int = 20_000, poll_ms: int = 700) -> 
             text = ""
         if _MATCH_LOADED_RE.search(text):
             return True
-        page.mouse.wheel(0, 400)
+        page.evaluate("window.scrollBy(0, 400)")
         page.wait_for_timeout(poll_ms)
         elapsed += poll_ms
     return False
@@ -253,7 +253,7 @@ def _scroll_into_markets(page, max_scrolls: int = 40) -> None:
     for _ in range(max_scrolls):
         if page.locator("text=/^Total de (Tiros de Esquina|goles|tarjetas)/i").count() > 0:
             return
-        page.mouse.wheel(0, 700)
+        page.evaluate("window.scrollBy(0, 700)")
         page.wait_for_timeout(500)
 
 
