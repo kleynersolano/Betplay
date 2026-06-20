@@ -64,13 +64,21 @@ _BULK_EXTRACT_JS = """
 () => {
     const headers = [];
     const teams = [];
+    const seen = new Set();
+    // Encabezados de liga: texto tipo 'Futbol / Pais / Liga'. NO son nodos
+    // hoja (suelen llevar un icono hijo), asi que se filtran por: una sola
+    // linea, corto, y que empiece por 'Futbol /'. Se deduplica por texto+y
+    // para descartar el ancestro repetido.
     document.querySelectorAll('*').forEach(el => {
-        if (el.children.length > 0) return;
         const text = (el.innerText || '').trim();
-        if (!text) return;
-        if (/^F[uú]tbol\\s*\\//i.test(text)) {
+        if (!text || text.length > 80 || text.indexOf('\\n') !== -1) return;
+        if (/^(⚽\\s*)?F[uú]tbol\\s*\\//i.test(text)) {
             const rect = el.getBoundingClientRect();
-            headers.push({y: rect.top + window.scrollY, text});
+            const y = rect.top + window.scrollY;
+            const key = text + '|' + Math.round(y);
+            if (seen.has(key)) return;
+            seen.add(key);
+            headers.push({y, text});
         }
     });
     document.querySelectorAll('.KambiBC-event-participants__name-participant-name').forEach(el => {
