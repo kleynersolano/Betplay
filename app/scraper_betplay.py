@@ -153,16 +153,21 @@ def fetch_upcoming_matches() -> list[Match]:
                 home, away, competition,
             )
 
-            row = page.get_by_text(home, exact=True).first
             try:
-                row.locator("xpath=ancestor::*[4]").first.click(timeout=2000)
+                row = page.get_by_text(home, exact=True).first
+                row.scroll_into_view_if_needed(timeout=4000)
+                page.wait_for_timeout(300)
+                row.locator("xpath=ancestor::*[4]").first.click(timeout=4000)
             except Exception:
+                log.warning("  No se pudo entrar al partido %s vs %s", home, away)
                 continue
             page.wait_for_timeout(1500)
             match.lines = _extract_market_lines(page)
+            log.info("  -> %d cuotas extraidas", len(match.lines))
             matches.append(match)
             page.go_back(timeout=10_000)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
+            _scroll_to_bottom(page)
 
         browser.close()
     return matches

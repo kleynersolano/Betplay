@@ -85,9 +85,10 @@ def _ask_google_ai_mode(prompt: str) -> str | None:
                 return None
             input_box.click()
             page.wait_for_timeout(300)
-            # type() simula tecleo real (el textarea/contenteditable de la UI
-            # de Google a veces ignora fill()).
-            input_box.type(prompt, delay=10)
+            # keyboard.type escribe en el elemento enfocado y evita la revision
+            # de "accionabilidad" del locator, que el textarea del Modo IA falla
+            # (hacia timeout con input_box.type()).
+            page.keyboard.type(prompt, delay=8)
             page.wait_for_timeout(300)
             page.keyboard.press("Enter")
             page.wait_for_timeout(20000)
