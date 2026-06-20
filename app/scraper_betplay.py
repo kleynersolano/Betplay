@@ -279,14 +279,25 @@ def fetch_upcoming_matches() -> list[Match]:
                 # frescos.
                 return
             except Exception:
-                # El navegador puede crashear/cerrarse tras varias
-                # navegaciones seguidas; se descarta este partido y se
-                # detiene la cosecha en curso, pero se conservan los
-                # partidos ya encontrados en vez de tumbar todo el ciclo.
+                # Antes esto detenia TODA la busqueda (raise _BrowserDied),
+                # incluso cuando la falla era propia de este partido puntual
+                # (timeout extrayendo cuotas, navegacion lenta, etc.) y no del
+                # navegador en si. En pruebas reales esto corto la busqueda
+                # en el partido numero 6 dejando afuera partidos validos que
+                # venian despues. Ahora se descarta solo este partido y se
+                # intenta volver al listado para seguir con los siguientes;
+                # solo si TAMBIEN falla el regreso al listado se asume que el
+                # navegador esta en mal estado y se detiene todo.
                 log.warning(
-                    "  Error inesperado procesando %s vs %s, se detiene la busqueda", home, away
+                    "  Error inesperado procesando %s vs %s, se descarta y se continua",
+                    home, away, exc_info=True,
                 )
-                raise _BrowserDied()
+                try:
+                    return_to_listing(page)
+                except Exception:
+                    log.warning("  No se pudo volver al listado, se detiene la busqueda")
+                    raise _BrowserDied()
+                return
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)

@@ -31,21 +31,30 @@ log = logging.getLogger("betbot.google_ai")
 # corto y mas robusto que pedir 20 partidos y promediarlos nosotros (eso
 # devolvia respuestas largas, lentas y a veces vacias). Se pide al modelo
 # que de su MEJOR estimacion numerica (probado: exigir verificacion estricta
-# en 3 fuentes hacia que devolviera todo null).
+# en 3 fuentes hacia que devolviera todo null). Se piden los promedios YA
+# separados por condicion (local/visitante) en la MISMA consulta -- no en
+# consultas separadas por venue, porque eso multiplicaria por 6 las llamadas
+# al Modo IA (que ya es lento y poco confiable) sin ganar fiabilidad.
 _STATS_INSTRUCTIONS = """Da tu MEJOR estimacion numerica de los PROMEDIOS por partido \
-(no devuelvas null salvo que el dato realmente no exista) de "{team}": goles anotados \
-(goals_for), goles recibidos (goals_against), tiros de esquina a favor (corners), y \
-tarjetas amarillas+rojas recibidas (cards). Ademas, un campo "context" con un resumen \
-breve (maximo 2 frases) del contexto reciente relevante para apostar (lesiones de \
-titulares, racha, motivacion del partido). Y un objeto "signals" con SEÑALES MEDIBLES \
-basadas en datos reales (tabla, alineacion confirmada), NO opiniones: \
+de "{team}" SEPARADOS por condicion de local y visitante (no devuelvas null salvo que \
+el dato realmente no exista): goles anotados de local (goals_for_home) y de visitante \
+(goals_for_away), goles recibidos de local (goals_against_home) y de visitante \
+(goals_against_away), tiros de esquina a favor de local (corners_home) y de visitante \
+(corners_away), y tarjetas amarillas+rojas recibidas de local (cards_home) y de \
+visitante (cards_away). Ademas, un campo "context" con un resumen breve (maximo 2 \
+frases) del contexto reciente relevante para apostar (lesiones de titulares, racha, \
+motivacion del partido). Y un objeto "signals" con SEÑALES MEDIBLES basadas en datos \
+reales (tabla, alineacion confirmada), NO opiniones: \
 "must_win" (true si "{team}" NECESITA ganar/anotar por su situacion en la tabla, si no false), \
 "role" ("favorito" si suele presionar, "defensivo" si suele encerrarse, "neutral" si no hay \
 rol claro), \
 "key_attacker_out" (true SOLO si hay baja confirmada de un goleador titular, si no false). \
 Responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
-{{"goals_for": <numero>, "goals_against": <numero>, "corners": <numero o null>, \
-"cards": <numero o null>, "context": "<resumen breve o cadena vacia>", \
+{{"goals_for_home": <numero>, "goals_for_away": <numero>, \
+"goals_against_home": <numero>, "goals_against_away": <numero>, \
+"corners_home": <numero o null>, "corners_away": <numero o null>, \
+"cards_home": <numero o null>, "cards_away": <numero o null>, \
+"context": "<resumen breve o cadena vacia>", \
 "signals": {{"must_win": <true|false>, "role": "<favorito|defensivo|neutral>", \
 "key_attacker_out": <true|false>}}}}
 """
@@ -114,6 +123,20 @@ def _find_input(page):
     return None
 
 
+def _input_center(page, locator) -> tuple[int, int]:
+    """Coordenadas del centro del campo de texto, para un click por mouse
+    como ultimo recurso cuando ni el foco por JS ni el click de Playwright
+    (normal o forzado) lograron meter el foco en el elemento."""
+    try:
+        box = locator.bounding_box(timeout=1000)
+        if box:
+            return (int(box["x"] + box["width"] / 2), int(box["y"] + box["height"] / 2))
+    except Exception:
+        pass
+    viewport = page.viewport_size or {"width": 1280, "height": 720}
+    return (viewport["width"] // 2, viewport["height"] // 2)
+
+
 def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 30_000) -> str | None:
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
@@ -128,36 +151,56 @@ def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 30_000) -> str | None:
             if input_box is None:
                 log.warning("No se encontro el campo de texto del Modo IA")
                 return None
-            # El textarea del Modo IA tiene autofocus y a veces nunca queda
-            # "stable" para Playwright -> input_box.click() hacia timeout de
-            # 30s y tumbaba la consulta entera (paso con Tunez). Se enfoca por
-            # JS (no exige accionabilidad) y, si falla, se sigue igual porque
-            # el autofocus suele bastar. Luego se escribe por teclado.
-            try:
-                input_box.evaluate("el => el.focus()")
-            except Exception:
-                pass
-            page.wait_for_timeout(200)
-            # keyboard.type escribe en el elemento enfocado y evita la revision
-            # de "accionabilidad" del locator, que el textarea del Modo IA falla
-            # (hacia timeout con input_box.type()).
-            page.keyboard.type(prompt, delay=8)
-            page.wait_for_timeout(300)
-            # Verifica que el texto realmente entro al campo; si el foco fallo,
-            # el prompt se perderia y la respuesta nunca llegaria. En ese caso
-            # se reintenta una vez con click forzado.
-            try:
-                typed = (input_box.input_value(timeout=1000) or "").strip()
-            except Exception:
-                typed = ""
-            if not typed:
+
+            def _typed_text() -> str:
+                # input_value() solo funciona en <textarea>/<input>; el Modo IA
+                # a veces usa un div contenteditable, donde input_value()
+                # lanza error aunque el texto SI haya entrado. text_content()
+                # cubre ambos casos.
                 try:
-                    input_box.click(force=True, timeout=3000)
-                    page.keyboard.type(prompt, delay=8)
-                    page.wait_for_timeout(300)
+                    val = input_box.input_value(timeout=800)
+                    if val:
+                        return val.strip()
                 except Exception:
-                    log.warning("No se pudo escribir el prompt en el Modo IA")
-                    return None
+                    pass
+                try:
+                    return (input_box.text_content(timeout=800) or "").strip()
+                except Exception:
+                    return ""
+
+            # Se intentan varias estrategias de foco/escritura en orden, cada
+            # una mas agresiva que la anterior, porque ninguna sola resulto
+            # confiable en pruebas reales: el autofocus a veces no alcanza, el
+            # click normal de Playwright exige "accionabilidad" que el
+            # textarea del Modo IA no siempre cumple (timeout de 30s), y el
+            # click forzado por si solo no garantiza que el foco quede en el
+            # elemento correcto. Se verifica el texto realmente escrito tras
+            # cada intento antes de pasar al siguiente.
+            strategies = [
+                lambda: input_box.evaluate("el => el.focus()"),
+                lambda: input_box.click(timeout=3000),
+                lambda: input_box.click(force=True, timeout=3000),
+                lambda: page.mouse.click(*_input_center(page, input_box)),
+            ]
+            typed = ""
+            for strategy in strategies:
+                try:
+                    strategy()
+                except Exception:
+                    pass
+                page.wait_for_timeout(200)
+                try:
+                    input_box.evaluate("el => { el.value !== undefined ? el.value = '' : el.textContent = ''; }")
+                except Exception:
+                    pass
+                page.keyboard.type(prompt, delay=8)
+                page.wait_for_timeout(300)
+                typed = _typed_text()
+                if typed:
+                    break
+            if not typed:
+                log.warning("No se pudo escribir el prompt en el Modo IA")
+                return None
             page.keyboard.press("Enter")
 
             # No se usa un selector fijo del contenedor de respuesta (la UI de
@@ -207,14 +250,17 @@ def get_team_form(
     if not data:
         return None
 
-    # Ahora la respuesta trae PROMEDIOS directos (no lista de partidos). Se
-    # cargan como overrides para que TeamForm.average() los devuelva tal cual.
+    # Ahora la respuesta trae PROMEDIOS directos ya separados por
+    # local/visitante (no lista de partidos). Se toma el sufijo que
+    # corresponde al venue de ESTE partido y se carga como override para
+    # que TeamForm.average() lo devuelva tal cual.
+    suffix = "home" if venue == "home" else "away"
     overrides: dict[str, float] = {}
     for key, attr in (
-        ("goals_for", "goals"),
-        ("goals_against", "goals_against"),
-        ("corners", "corners"),
-        ("cards", "cards"),
+        (f"goals_for_{suffix}", "goals"),
+        (f"goals_against_{suffix}", "goals_against"),
+        (f"corners_{suffix}", "corners"),
+        (f"cards_{suffix}", "cards"),
     ):
         val = _to_float(data.get(key))
         if val is not None:
