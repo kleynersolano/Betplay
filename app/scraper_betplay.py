@@ -177,6 +177,13 @@ def fetch_upcoming_matches() -> list[Match]:
         page.wait_for_timeout(800)
         _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
         page.wait_for_timeout(1000)
+        # Las coordenadas Y de header_positions corresponden a la pagina
+        # anterior. Tras este goto, el DOM es nuevo y esas Y ya no
+        # corresponden a los mismos encabezados (causaba que partidos
+        # como Tunez vs Japon quedaran mal clasificados como "Colombia"
+        # al mezclarse posiciones viejas con filas nuevas). Se limpia
+        # para que solo se usen posiciones frescas de la pagina actual.
+        header_positions.clear()
 
     def harvest_and_process(page) -> None:
         data = page.evaluate(_BULK_EXTRACT_JS)
