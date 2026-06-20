@@ -346,22 +346,36 @@ def _scroll_into_markets(page, max_scrolls: int = 40) -> None:
     en cargar. Se scrollea hasta que aparezca al menos un encabezado de
     mercado o se agoten los intentos."""
     for _ in range(max_scrolls):
-        if page.locator("text=/^Total de (Tiros de Esquina|goles|tarjetas)/i").count() > 0:
+        if page.locator(_MARKET_HEADING_RE).count() > 0:
             return
         page.evaluate("window.scrollBy(0, 700)")
         page.wait_for_timeout(500)
 
 
+# Antes solo se buscaban encabezados que empezaran exactamente con
+# "Total de Tiros de Esquina/goles/tarjetas", lo que dejaba afuera los
+# mercados POR EQUIPO (ej. "Tiros de Esquina - Alemania", "Goles de Costa
+# de Marfil"), que no siempre empiezan con esa misma palabra "Total". Se
+# amplia para capturar cualquier encabezado de esos 3 mercados (total o
+# por equipo), excluyendo handicap (prohibido) y goleador/anotador
+# (mercado de jugadores, no de equipo/total).
+_MARKET_HEADING_RE = "text=/(tiros de esquina|tarjeta|gol(?!eador))/i"
+_EXCLUDED_HEADING_RE = re.compile(r"hándicap|handicap|goleador|anotador|primer gol|[uú]ltimo gol", re.I)
+
+
 def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
-    """Lee los mercados de goles/tarjetas/tiros de esquina actualmente
-    visibles en la pestana activa de la pagina del partido."""
+    """Lee los mercados de goles/tarjetas/tiros de esquina (total y por
+    equipo) actualmente visibles en la pestana activa de la pagina del
+    partido."""
     _scroll_into_markets(page)
-    headings = page.locator("text=/^Total de (Tiros de Esquina|goles|tarjetas)/i")
+    headings = page.locator(_MARKET_HEADING_RE)
     for i in range(headings.count()):
         heading = headings.nth(i)
         try:
             market_name = heading.inner_text(timeout=1000).strip()
         except Exception:
+            continue
+        if not market_name or _EXCLUDED_HEADING_RE.search(market_name):
             continue
         # El heading no tiene un following-sibling util: en el DOM real de
         # Kambi, heading y filas viven dentro de un ancestro comun con la

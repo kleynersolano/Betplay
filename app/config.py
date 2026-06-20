@@ -44,6 +44,11 @@ VALID_COMPETITIONS_KEYWORDS = [
     "euro", "categoria primera a", "primera division",
 ]
 
+# Orden de prioridad pedido para presentar las mejores apuestas: primero
+# tiros de esquina (total y por equipo), luego goles (total y por
+# equipo), luego tarjetas (total y por equipo).
+MARKET_PRIORITY = ["corners", "goals", "cards"]
+
 EXCLUDED_KEYWORDS = [
     "femenino", "women", "(f)", "(w)", "sub-15", "sub-17", "sub-19", "sub-20",
     "sub-21", "sub 20", "reserve", "reservas", "amateur", "segunda division",

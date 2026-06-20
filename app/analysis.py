@@ -8,7 +8,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from app.config import MIN_VALUE_PERCENT
+from app.config import MIN_VALUE_PERCENT, MARKET_PRIORITY
 from app.scraper_betplay import Match, MarketLine
 from app.stats_provider import TeamForm
 
@@ -36,6 +36,7 @@ class BetEvaluation:
     odds: float
     prob_real: float
     value_percent: float
+    stat: str = ""
     home_context: str | None = None
     away_context: str | None = None
 
@@ -127,10 +128,16 @@ def evaluate_match(
                     odds=line.odds,
                     prob_real=prob_real,
                     value_percent=value_percent,
+                    stat=stat,
                     home_context=home_form.context,
                     away_context=away_form.context,
                 )
             )
 
-    evaluations.sort(key=lambda e: e.prob_real, reverse=True)
-    return evaluations[:3]
+    # Se eligen las mejores apuestas por valor real (value_percent), pero
+    # se devuelven ordenadas segun la prioridad de analisis pedida:
+    # tiros de esquina primero, luego goles, luego tarjetas.
+    evaluations.sort(key=lambda e: e.value_percent, reverse=True)
+    best = evaluations[:3]
+    best.sort(key=lambda e: MARKET_PRIORITY.index(e.stat) if e.stat in MARKET_PRIORITY else len(MARKET_PRIORITY))
+    return best
