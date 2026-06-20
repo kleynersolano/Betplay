@@ -241,7 +241,31 @@ def _scroll_to_bottom(page, max_scrolls: int = 25) -> None:
 
 
 _MARKET_HEADING_RE = re.compile(r"^Total de (Tiros de Esquina|goles|tarjetas)", re.I)
-_ROW_RE = re.compile(r"^(M[aá]s de|Menos de)\s*([\d.,]+)\s+([\d.,]+)$", re.I)
+_DIRECTION_RE = re.compile(r"^(M[aá]s de|Menos de)$", re.I)
+_NUMERIC_RE = re.compile(r"^[\d.,]+$")
+
+
+def _parse_market_rows(block_text: str) -> list[tuple[str, str, str]]:
+    """Cada cuota viene repartida en 3 lineas separadas (direccion, valor
+    de linea, cuota), no en una sola linea como '"Mas de 3.5  2.28"'. Se
+    recorre el texto buscando una linea de direccion seguida de 2 lineas
+    numericas."""
+    lines = [ln.strip() for ln in block_text.splitlines() if ln.strip()]
+    rows: list[tuple[str, str, str]] = []
+    i = 0
+    while i < len(lines):
+        m = _DIRECTION_RE.match(lines[i])
+        if (
+            m
+            and i + 2 < len(lines)
+            and _NUMERIC_RE.match(lines[i + 1])
+            and _NUMERIC_RE.match(lines[i + 2])
+        ):
+            rows.append((m.group(1), lines[i + 1], lines[i + 2]))
+            i += 3
+        else:
+            i += 1
+    return rows
 
 
 def _scroll_into_markets(page, max_scrolls: int = 40) -> None:
@@ -282,11 +306,7 @@ def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
             block_text = container.first.inner_text(timeout=1000)
         except Exception:
             continue
-        for row in block_text.splitlines():
-            m = _ROW_RE.match(row.strip())
-            if not m:
-                continue
-            direction, line_val, odds_val = m.groups()
+        for direction, line_val, odds_val in _parse_market_rows(block_text):
             try:
                 odds = float(odds_val.replace(",", "."))
             except ValueError:
