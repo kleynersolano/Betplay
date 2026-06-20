@@ -222,16 +222,25 @@ def fetch_upcoming_matches() -> list[Match]:
 
         try:
             harvest_and_process(page)
-            previous_height = -1
             stable = 0
-            for _ in range(60):
-                current_height = page.evaluate("document.body.scrollHeight")
-                page.mouse.wheel(0, 1200)
+            for _ in range(120):
+                seen_before = len(seen_pairs)
+                # window.scrollBy en vez de mouse.wheel: este ultimo depende
+                # de la posicion del cursor (por defecto (0,0), sobre la
+                # barra lateral), y en pruebas reales terminaba scrolleando
+                # el panel equivocado, dejando el listado pegado arriba sin
+                # avanzar nunca hacia partidos mas abajo (ej. el Mundial).
+                page.evaluate("window.scrollBy(0, 1200)")
                 page.wait_for_timeout(350)
                 harvest_and_process(page)
-                if current_height == previous_height:
+                # document.body.scrollHeight no sirve para detectar "no hay
+                # mas contenido" porque la lista esta virtualizada (la altura
+                # total ya refleja el tamaño completo desde el inicio); en
+                # vez de eso se considera estable cuando ya no aparecen
+                # partidos nuevos.
+                if len(seen_pairs) == seen_before:
                     stable += 1
-                    if stable >= 3:
+                    if stable >= 6:
                         break
                 else:
                     stable = 0
