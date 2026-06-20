@@ -458,7 +458,7 @@ def _scroll_into_markets(page, max_scrolls: int = 40) -> None:
 _MARKET_HEADING_RE = "text=/^(Total de )?(Tiros de Esquina|Goles|Tarjetas)\\b/i"
 _EXCLUDED_HEADING_RE = re.compile(
     r"hándicap|handicap|goleador|anotador|primer gol|[uú]ltimo gol"
-    r"|tiempo|mitad|1[eé]r|2d[oa]|primera|segunda",
+    r"|tiempo|mitad|[12]\s*\.?\s*[ªa]\.?\s*parte",
     re.I,
 )
 
