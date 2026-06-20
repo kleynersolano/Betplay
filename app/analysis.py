@@ -4,11 +4,14 @@ promedio historico para corners) y value%.
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
 
 from app.config import MIN_VALUE_PERCENT, MARKET_PRIORITY
+
+log = logging.getLogger("betbot.analysis")
 from app.scraper_betplay import Match, MarketLine
 from app.stats_provider import TeamForm
 
@@ -50,11 +53,17 @@ def _poisson_over_prob(lam: float, line: float) -> float:
 
 
 def _parse_line_value(selection: str) -> tuple[str, float] | None:
-    m = re.search(r"(\d+(?:\.\d+)?)", selection)
+    m = re.search(r"(\d+(?:[.,]\d+)?)", selection)
     if not m:
         return None
-    line = float(m.group(1))
-    direction = "over" if re.search(r"m[ae]s", selection, re.I) else "under"
+    line = float(m.group(1).replace(",", "."))
+    # OJO: la seleccion viene como "Más de 2.5" / "Menos de 2.5". El
+    # patron anterior r"m[ae]s" NO coincidia con "Más" (tiene "á"
+    # acentuada, no "a"), asi que TODA seleccion "Más de" terminaba
+    # clasificada como "under" -- corrompiendo la mitad de los calculos
+    # de probabilidad y por eso casi nunca habia value. Se usa "m[aá]s"
+    # para cubrir la version con y sin acento.
+    direction = "over" if re.search(r"m[aá]s", selection, re.I) else "under"
     return direction, line
 
 
@@ -86,9 +95,17 @@ def evaluate_match(
     match: Match, home_form: TeamForm | None, away_form: TeamForm | None
 ) -> list[BetEvaluation]:
     if home_form is None or away_form is None or not home_form.valid or not away_form.valid:
+        log.info(
+            "  [%s vs %s] sin forma valida (home=%s, away=%s) -> no se evalua",
+            match.home_team, match.away_team,
+            "ok" if home_form and home_form.valid else "FALTA",
+            "ok" if away_form and away_form.valid else "FALTA",
+        )
         return []
 
     evaluations: list[BetEvaluation] = []
+    best_seen: tuple[float, str, str] | None = None  # (value%, market, selection)
+    considered = 0
     for line in match.lines:
         stat = _stat_for_market(line.market)
         if stat is None:
@@ -119,6 +136,10 @@ def evaluate_match(
         implied = _implied_prob(line.odds)
         value_percent = (prob_real - implied) / implied * 100 if implied > 0 else 0.0
 
+        considered += 1
+        if best_seen is None or value_percent > best_seen[0]:
+            best_seen = (value_percent, line.market, line.selection)
+
         if value_percent >= MIN_VALUE_PERCENT:
             evaluations.append(
                 BetEvaluation(
@@ -133,6 +154,18 @@ def evaluate_match(
                     away_context=away_form.context,
                 )
             )
+
+    if best_seen is not None:
+        log.info(
+            "  [%s vs %s] %d lineas evaluadas | mejor value=%.1f%% (umbral %.1f%%) en %s | %s",
+            match.home_team, match.away_team, considered,
+            best_seen[0], MIN_VALUE_PERCENT, best_seen[1], best_seen[2],
+        )
+    else:
+        log.info(
+            "  [%s vs %s] 0 lineas evaluables (las %d cuotas extraidas no eran goles/tarjetas/esquinas o no se pudieron parsear)",
+            match.home_team, match.away_team, len(match.lines),
+        )
 
     # Se eligen las mejores apuestas por valor real (value_percent), pero
     # se devuelven ordenadas segun la prioridad de analisis pedida:
