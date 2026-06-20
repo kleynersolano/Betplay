@@ -301,51 +301,61 @@ def fetch_upcoming_matches() -> list[Match]:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
-        page = browser.new_page()
-        page.goto(BETPLAY_URL, wait_until="load", timeout=60_000)
-        if not _wait_for_listing(page):
-            log.warning("El listado no termino de cargar al iniciar")
-
-        _click_text(page, "Football|F[uú]tbol", exact=True)
-        page.wait_for_timeout(800)
-        _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
-        page.wait_for_timeout(1000)
-
         try:
-            harvest_and_process(page)
-            stable = 0
-            for _ in range(120):
-                seen_before = len(seen_pairs)
-                # window.scrollBy en vez de mouse.wheel: este ultimo depende
-                # de la posicion del cursor (por defecto (0,0), sobre la
-                # barra lateral), y en pruebas reales terminaba scrolleando
-                # el panel equivocado, dejando el listado pegado arriba sin
-                # avanzar nunca hacia partidos mas abajo (ej. el Mundial).
-                page.evaluate("window.scrollBy(0, 1200)")
-                page.wait_for_timeout(350)
-                harvest_and_process(page)
-                # document.body.scrollHeight no sirve para detectar "no hay
-                # mas contenido" porque la lista esta virtualizada (la altura
-                # total ya refleja el tamaño completo desde el inicio); en
-                # vez de eso se considera estable cuando ya no aparecen
-                # partidos nuevos.
-                if len(seen_pairs) == seen_before:
-                    stable += 1
-                    if stable >= 6:
-                        break
-                else:
-                    stable = 0
-        except _BrowserDied:
-            pass
-        except Exception:
-            # Errores como "Execution context was destroyed" pueden ocurrir
-            # si la pagina sigue navegando justo cuando se llama
-            # page.evaluate (ej. tras un return_to_listing que no termino de
-            # asentarse). No tumbamos todo el ciclo: se conservan los
-            # partidos ya encontrados hasta este punto.
-            log.warning("Se detuvo la cosecha por un error de navegacion inesperado", exc_info=True)
+            # Todo lo que puede fallar (goto, clicks, cosecha) queda dentro
+            # de este try/finally: antes browser.close() solo se llamaba al
+            # final del bloque feliz, asi que si goto() o _click_text()
+            # fallaban antes de llegar ahi, el proceso de Chromium quedaba
+            # vivo (zombie) y se acumulaba ciclo tras ciclo, consumiendo RAM
+            # hasta volver lenta toda la maquina.
+            page = browser.new_page()
+            page.goto(BETPLAY_URL, wait_until="load", timeout=60_000)
+            if not _wait_for_listing(page):
+                log.warning("El listado no termino de cargar al iniciar")
 
-        browser.close()
+            _click_text(page, "Football|F[uú]tbol", exact=True)
+            page.wait_for_timeout(800)
+            _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
+            page.wait_for_timeout(1000)
+
+            try:
+                harvest_and_process(page)
+                stable = 0
+                for _ in range(120):
+                    seen_before = len(seen_pairs)
+                    # window.scrollBy en vez de mouse.wheel: este ultimo depende
+                    # de la posicion del cursor (por defecto (0,0), sobre la
+                    # barra lateral), y en pruebas reales terminaba scrolleando
+                    # el panel equivocado, dejando el listado pegado arriba sin
+                    # avanzar nunca hacia partidos mas abajo (ej. el Mundial).
+                    page.evaluate("window.scrollBy(0, 1200)")
+                    page.wait_for_timeout(350)
+                    harvest_and_process(page)
+                    # document.body.scrollHeight no sirve para detectar "no hay
+                    # mas contenido" porque la lista esta virtualizada (la altura
+                    # total ya refleja el tamaño completo desde el inicio); en
+                    # vez de eso se considera estable cuando ya no aparecen
+                    # partidos nuevos.
+                    if len(seen_pairs) == seen_before:
+                        stable += 1
+                        if stable >= 6:
+                            break
+                    else:
+                        stable = 0
+            except _BrowserDied:
+                pass
+            except Exception:
+                # Errores como "Execution context was destroyed" pueden ocurrir
+                # si la pagina sigue navegando justo cuando se llama
+                # page.evaluate (ej. tras un return_to_listing que no termino de
+                # asentarse). No tumbamos todo el ciclo: se conservan los
+                # partidos ya encontrados hasta este punto.
+                log.warning("Se detuvo la cosecha por un error de navegacion inesperado", exc_info=True)
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
     return matches
 
 

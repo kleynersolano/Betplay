@@ -1,4 +1,6 @@
+import gc
 import logging
+import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -65,7 +67,27 @@ def _get_team_form_with_fallback(
     return None
 
 
+def _cleanup_before_cycle() -> None:
+    """Tras varios ciclos seguidos lanzando y cerrando Chromium (BetPlay y
+    Google AI Mode), procesos huerfanos que quedaron vivos por un cierre
+    fallido (crash, Ctrl+C a mitad de operacion, etc.) se iban acumulando y
+    terminaban consumiendo toda la RAM, dejando el equipo lento al punto de
+    que ni BetPlay terminaba de cargar las cuotas. Antes de cada ciclo se
+    matan procesos de Chromium que hayan quedado colgados (no deberia haber
+    ninguno vivo entre ciclos, ya que cada scraper cierra su navegador al
+    terminar) y se fuerza una recoleccion de basura de Python."""
+    try:
+        subprocess.run(
+            ["pkill", "-9", "-f", "chrome-linux/headless_shell|chromium.*--remote-debugging"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+    gc.collect()
+
+
 def run_cycle() -> None:
+    _cleanup_before_cycle()
     log.info("Iniciando ciclo de analisis...")
     try:
         matches = fetch_upcoming_matches()
