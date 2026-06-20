@@ -16,6 +16,14 @@ def send_message(text: str) -> None:
     )
 
 
+def _confidence_label(value_percent: float) -> str:
+    if value_percent >= 30:
+        return "MAXIMA"
+    if value_percent >= 15:
+        return "ALTA"
+    return "MEDIA"
+
+
 def format_evaluations(evaluations: list[BetEvaluation]) -> str:
     if not evaluations:
         return ""
@@ -26,9 +34,11 @@ def format_evaluations(evaluations: list[BetEvaluation]) -> str:
         "",
     ]
     for i, ev in enumerate(evaluations, start=1):
+        confidence = _confidence_label(ev.value_percent)
         lines.append(
-            f"{i}. {ev.market} -- {ev.selection} | cuota {ev.odds:.2f} | "
-            f"prob {ev.prob_real*100:.1f}% | value {ev.value_percent:.1f}%"
+            f"{i}. Probabilidad: {ev.prob_real*100:.0f}% | Cuota: {ev.odds:.2f} | "
+            f"Value: {ev.value_percent:.1f}% | Apuesta: {ev.market} -- {ev.selection} | "
+            f"Confianza: {confidence}"
         )
 
     first = evaluations[0]

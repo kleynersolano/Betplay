@@ -61,8 +61,24 @@ def _combined_lambda(home_avg: float, away_avg: float) -> float:
     return (home_avg + away_avg) / 2
 
 
-def _implied_prob_net(odds: float, market_margin: float = 0.05) -> float:
-    return (1 / odds) / (1 + market_margin)
+def _goals_lambda(home_form: TeamForm, away_form: TeamForm) -> float | None:
+    """Lambda de goles totales del partido = goles esperados de cada equipo,
+    donde lo esperado de un equipo es el promedio de (sus goles anotados,
+    los goles que concede su rival), siguiendo la metodologia pedida:
+    'goles promedio equipo + goles concedidos promedio contrario / 2'."""
+    home_for = home_form.average("goals")
+    away_against = away_form.average("goals_against")
+    away_for = away_form.average("goals")
+    home_against = home_form.average("goals_against")
+    if None in (home_for, away_against, away_for, home_against):
+        return None
+    home_expected = (home_for + away_against) / 2
+    away_expected = (away_for + home_against) / 2
+    return home_expected + away_expected
+
+
+def _implied_prob(odds: float) -> float:
+    return 1 / odds
 
 
 def evaluate_match(
@@ -77,9 +93,13 @@ def evaluate_match(
         if stat is None:
             continue
 
-        home_avg = home_form.average(stat)
-        away_avg = away_form.average(stat)
-        if home_avg is None or away_avg is None:
+        if stat == "goals":
+            lam = _goals_lambda(home_form, away_form)
+        else:
+            home_avg = home_form.average(stat)
+            away_avg = away_form.average(stat)
+            lam = _combined_lambda(home_avg, away_avg) if home_avg is not None and away_avg is not None else None
+        if lam is None:
             continue
 
         parsed = _parse_line_value(line.selection)
@@ -87,7 +107,6 @@ def evaluate_match(
             continue
 
         direction, line_value = parsed
-        lam = _combined_lambda(home_avg, away_avg)
 
         if stat in USES_POISSON:
             prob_over = _poisson_over_prob(lam, line_value)
@@ -96,7 +115,7 @@ def evaluate_match(
             prob_over = min(0.95, max(0.05, 0.5 + (lam - line_value) / max(lam, 1)))
             prob_real = prob_over if direction == "over" else 1 - prob_over
 
-        implied = _implied_prob_net(line.odds)
+        implied = _implied_prob(line.odds)
         value_percent = (prob_real - implied) / implied * 100 if implied > 0 else 0.0
 
         if value_percent >= MIN_VALUE_PERCENT:
