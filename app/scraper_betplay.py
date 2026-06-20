@@ -112,31 +112,39 @@ def _click_text(page, pattern: str, exact: bool = False) -> bool:
 
 _BULK_EXTRACT_JS = """
 () => {
-    const headers = [];
+    // Antes se emparejaba cada fila de equipos con el encabezado de
+    // competencia mas cercano por coordenada Y en pixeles. En pruebas
+    // reales esto fallaba: BetPlay no agrupa la lista en bloques limpios
+    // por competencia (parece ordenar por hora de inicio), y la
+    // virtualizacion recicla filas, asi que la Y de un encabezado
+    // capturado en un instante podia no corresponder al bloque real de
+    // un partido capturado en otro instante. El orden del DOM (document
+    // order) si es confiable: recorremos el documento de arriba a abajo
+    // y vamos asignando a cada fila de equipos el ULTIMO encabezado de
+    // competencia visto hasta ese punto, en ese mismo recorrido.
     const teams = [];
-    const seen = new Set();
-    document.querySelectorAll('*').forEach(el => {
-        const text = (el.innerText || '').trim();
-        if (!text || text.length > 80 || text.indexOf('\\n') !== -1) return;
-        if (/^(⚽\\s*)?F[uú]tbol\\s*\\//i.test(text)) {
-            const rect = el.getBoundingClientRect();
-            const y = rect.top + window.scrollY;
-            const key = text + '|' + Math.round(y);
-            if (seen.has(key)) return;
-            seen.add(key);
-            headers.push({y, text});
+    let currentHeader = '';
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    let node = walker.currentNode;
+    while (node) {
+        if (node.classList && node.classList.contains('KambiBC-event-participants__name-participant-name')) {
+            const rect = node.getBoundingClientRect();
+            teams.push({
+                y: rect.top + window.scrollY,
+                vx: rect.left + rect.width / 2,
+                vy: rect.top + rect.height / 2,
+                text: (node.innerText || '').trim(),
+                competition: currentHeader,
+            });
+        } else {
+            const text = (node.innerText || '').trim();
+            if (text && text.length <= 80 && text.indexOf('\\n') === -1 && /^(⚽\\s*)?F[uú]tbol\\s*\\//i.test(text)) {
+                currentHeader = text;
+            }
         }
-    });
-    document.querySelectorAll('.KambiBC-event-participants__name-participant-name').forEach(el => {
-        const rect = el.getBoundingClientRect();
-        teams.push({
-            y: rect.top + window.scrollY,
-            vx: rect.left + rect.width / 2,
-            vy: rect.top + rect.height / 2,
-            text: (el.innerText || '').trim(),
-        });
-    });
-    return {headers, teams};
+        node = walker.nextNode();
+    }
+    return {teams};
 }
 """
 
@@ -162,7 +170,6 @@ def fetch_upcoming_matches() -> list[Match]:
 
     matches: list[Match] = []
     seen_pairs: set[tuple[str, str]] = set()
-    header_positions: list[tuple[float, str]] = []
 
     def return_to_listing(page) -> None:
         # page.go_back() resulto poco confiable en esta SPA: en pruebas
@@ -177,22 +184,9 @@ def fetch_upcoming_matches() -> list[Match]:
         page.wait_for_timeout(800)
         _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
         page.wait_for_timeout(1000)
-        # Las coordenadas Y de header_positions corresponden a la pagina
-        # anterior. Tras este goto, el DOM es nuevo y esas Y ya no
-        # corresponden a los mismos encabezados (causaba que partidos
-        # como Tunez vs Japon quedaran mal clasificados como "Colombia"
-        # al mezclarse posiciones viejas con filas nuevas). Se limpia
-        # para que solo se usen posiciones frescas de la pagina actual.
-        header_positions.clear()
 
     def harvest_and_process(page) -> None:
         data = page.evaluate(_BULK_EXTRACT_JS)
-        for h in data["headers"]:
-            entry = (h["y"], h["text"])
-            if entry not in header_positions:
-                header_positions.append(entry)
-        header_positions.sort(key=lambda e: e[0])
-
         teams = data["teams"]
         for i in range(0, len(teams) - 1, 2):
             home, away = teams[i]["text"], teams[i + 1]["text"]
@@ -200,13 +194,7 @@ def fetch_upcoming_matches() -> list[Match]:
                 continue
             seen_pairs.add((home, away))
 
-            y = teams[i]["y"]
-            competition = ""
-            for header_y, text in header_positions:
-                if header_y <= y + 5:
-                    competition = text
-                else:
-                    break
+            competition = teams[i]["competition"]
 
             match = Match(
                 competition=competition,
@@ -298,7 +286,13 @@ def fetch_upcoming_matches() -> list[Match]:
                     stable = 0
         except _BrowserDied:
             pass
-            previous_height = current_height
+        except Exception:
+            # Errores como "Execution context was destroyed" pueden ocurrir
+            # si la pagina sigue navegando justo cuando se llama
+            # page.evaluate (ej. tras un return_to_listing que no termino de
+            # asentarse). No tumbamos todo el ciclo: se conservan los
+            # partidos ya encontrados hasta este punto.
+            log.warning("Se detuvo la cosecha por un error de navegacion inesperado", exc_info=True)
 
         browser.close()
     return matches
