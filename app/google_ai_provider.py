@@ -47,6 +47,28 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def _find_input(page):
+    """Localiza el campo de texto del Modo IA probando, en orden: el
+    placeholder visible ('Haz una pregunta' / 'Pregunta'), el rol de
+    combobox/textbox, y por ultimo selectores clasicos del buscador."""
+    candidates = [
+        lambda: page.get_by_placeholder(re.compile("Haz una pregunta|Pregunta", re.I)),
+        lambda: page.get_by_role("combobox"),
+        lambda: page.get_by_role("textbox"),
+        lambda: page.locator("textarea[name='q'], textarea#APjFqb"),
+        lambda: page.locator("div[contenteditable='true']"),
+    ]
+    for build in candidates:
+        try:
+            loc = build().first
+            if loc.count() > 0:
+                loc.wait_for(state="visible", timeout=3000)
+                return loc
+        except Exception:
+            continue
+    return None
+
+
 def _ask_google_ai_mode(prompt: str) -> str | None:
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
@@ -57,13 +79,18 @@ def _ask_google_ai_mode(prompt: str) -> str | None:
             page = context.new_page()
             page.goto(GOOGLE_AI_URL, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(2500)
-            input_box = page.locator(
-                "textarea[name='q'], textarea#APjFqb, div[contenteditable='true'][role='textbox']"
-            ).first
+            input_box = _find_input(page)
+            if input_box is None:
+                log.warning("No se encontro el campo de texto del Modo IA")
+                return None
             input_box.click()
-            input_box.fill(prompt)
-            input_box.press("Enter")
-            page.wait_for_timeout(15000)
+            page.wait_for_timeout(300)
+            # type() simula tecleo real (el textarea/contenteditable de la UI
+            # de Google a veces ignora fill()).
+            input_box.type(prompt, delay=10)
+            page.wait_for_timeout(300)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(20000)
             response_blocks = page.locator(
                 "[data-async-context*='aimode'], .aimode-answer, #rso div[data-content-feature]"
             )
