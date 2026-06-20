@@ -60,11 +60,36 @@ def _click_text(page, pattern: str, exact: bool = False) -> bool:
         return False
 
 
+_BULK_EXTRACT_JS = """
+() => {
+    const headers = [];
+    const teams = [];
+    document.querySelectorAll('*').forEach(el => {
+        if (el.children.length > 0) return;
+        const text = (el.innerText || '').trim();
+        if (!text) return;
+        if (/^F[uú]tbol\\s*\\//i.test(text)) {
+            const rect = el.getBoundingClientRect();
+            headers.push({y: rect.top + window.scrollY, text});
+        }
+    });
+    document.querySelectorAll('.KambiBC-event-participants__name-participant-name').forEach(el => {
+        const rect = el.getBoundingClientRect();
+        teams.push({y: rect.top + window.scrollY, text: (el.innerText || '').trim()});
+    });
+    return {headers, teams};
+}
+"""
+
+
 def fetch_upcoming_matches() -> list[Match]:
     """Abre BetPlay 'starting-soon', selecciona Football + ventana de horas y
     devuelve los partidos listados (ya filtrados por competicion valida).
     Como la pestana de horas (ej. '4 horas') ya filtra el listado del lado del
-    sitio, no se vuelve a filtrar por hora aqui."""
+    sitio, no se vuelve a filtrar por hora aqui.
+    La extraccion de equipos y encabezados de liga (texto 'Futbol / Pais /
+    Liga') se hace de una sola vez con JS (page.evaluate) para evitar miles
+    de llamadas individuales de Playwright, que eran el cuello de botella."""
     matches: list[Match] = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
@@ -78,37 +103,20 @@ def fetch_upcoming_matches() -> list[Match]:
         page.wait_for_timeout(1000)
         _scroll_to_bottom(page)
 
-        team_names = page.locator(".KambiBC-event-participants__name-participant-name")
-        count = team_names.count()
+        data = page.evaluate(_BULK_EXTRACT_JS)
+        header_positions = sorted((h["y"], h["text"]) for h in data["headers"])
+        teams = data["teams"]
 
-        league_keywords_pattern = "|".join(re.escape(k) for k in VALID_COMPETITIONS_KEYWORDS)
-        league_headers = page.locator(f"text=/{league_keywords_pattern}/i")
-        header_positions: list[tuple[float, str]] = []
-        for h in range(league_headers.count()):
-            try:
-                box = league_headers.nth(h).bounding_box()
-                text = league_headers.nth(h).inner_text(timeout=1000)
-            except Exception:
-                continue
-            if box:
-                header_positions.append((box["y"], text.strip()))
-        header_positions.sort(key=lambda item: item[0])
-
-        for i in range(0, count - 1, 2):
-            home_el = team_names.nth(i)
-            away_el = team_names.nth(i + 1)
-            try:
-                home = home_el.inner_text(timeout=1000).strip()
-                away = away_el.inner_text(timeout=1000).strip()
-                box = home_el.bounding_box()
-            except Exception:
-                continue
-            if not home or not away or box is None:
+        seen_pairs: set[tuple[str, str]] = set()
+        for i in range(0, len(teams) - 1, 2):
+            home, away = teams[i]["text"], teams[i + 1]["text"]
+            y = teams[i]["y"]
+            if not home or not away:
                 continue
 
             competition = ""
-            for y, text in header_positions:
-                if y <= box["y"] + 5:
+            for header_y, text in header_positions:
+                if header_y <= y + 5:
                     competition = text
                 else:
                     break
@@ -121,10 +129,13 @@ def fetch_upcoming_matches() -> list[Match]:
             )
             if not match.is_valid_competition:
                 continue
+            if (home, away) in seen_pairs:
+                continue
+            seen_pairs.add((home, away))
 
-            row = home_el.locator("xpath=ancestor::*[4]")
+            row = page.get_by_text(home, exact=True).first
             try:
-                row.first.click(timeout=2000)
+                row.locator("xpath=ancestor::*[4]").first.click(timeout=2000)
             except Exception:
                 continue
             page.wait_for_timeout(1500)

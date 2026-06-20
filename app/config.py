@@ -38,7 +38,8 @@ VALID_COMPETITIONS_KEYWORDS = [
 ]
 
 EXCLUDED_KEYWORDS = [
-    "femenino", "women", "sub-15", "sub-17", "sub-19", "sub-20", "sub-21",
+    "femenino", "women", "(f)", "sub-15", "sub-17", "sub-19", "sub-20", "sub-21",
     "reserve", "reservas", "amateur", "segunda division", "b division",
-    "youth", "u15", "u17", "u19", "u20", "u21",
+    "youth", "u15", "u17", "u19", "u20", "u21", "la liga 2", "rfef",
+    "playoff", "promocion de ascenso", "primera rfef", "tercera division",
 ]
