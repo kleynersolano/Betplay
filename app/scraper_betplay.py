@@ -112,38 +112,67 @@ def _click_text(page, pattern: str, exact: bool = False) -> bool:
 
 _BULK_EXTRACT_JS = """
 () => {
-    // Antes se emparejaba cada fila de equipos con el encabezado de
-    // competencia mas cercano por coordenada Y en pixeles. En pruebas
-    // reales esto fallaba: BetPlay no agrupa la lista en bloques limpios
-    // por competencia (parece ordenar por hora de inicio), y la
-    // virtualizacion recicla filas, asi que la Y de un encabezado
-    // capturado en un instante podia no corresponder al bloque real de
-    // un partido capturado en otro instante. El orden del DOM (document
-    // order) si es confiable: recorremos el documento de arriba a abajo
-    // y vamos asignando a cada fila de equipos el ULTIMO encabezado de
-    // competencia visto hasta ese punto, en ese mismo recorrido.
-    const teams = [];
-    let currentHeader = '';
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-    let node = walker.currentNode;
-    while (node) {
-        if (node.classList && node.classList.contains('KambiBC-event-participants__name-participant-name')) {
-            const rect = node.getBoundingClientRect();
-            teams.push({
-                y: rect.top + window.scrollY,
-                vx: rect.left + rect.width / 2,
-                vy: rect.top + rect.height / 2,
-                text: (node.innerText || '').trim(),
-                competition: currentHeader,
-            });
-        } else {
-            const text = (node.innerText || '').trim();
-            if (text && text.length <= 80 && text.indexOf('\\n') === -1 && /^(⚽\\s*)?F[uú]tbol\\s*\\//i.test(text)) {
-                currentHeader = text;
-            }
+    // Antes se asignaba a cada fila de equipos el ULTIMO encabezado de
+    // competencia visto en un recorrido global del documento (document
+    // order). En pruebas reales esto seguia fallando: el DOM tiene
+    // encabezados o bloques de otras pestañas/secciones que quedan
+    // ocultos (display:none) pero siguen presentes, y el recorrido
+    // global los recogia fuera de orden, asignando competencias
+    // equivocadas (ej. "Colombia" a partidos del Mundial). Ahora se
+    // busca, PARA CADA FILA, el encabezado mas cercano subiendo por sus
+    // propios ancestros y revisando hermanos anteriores dentro de esa
+    // misma rama -- y se descartan candidatos ocultos (offsetParent
+    // null) para no recoger contenido de pestañas no visibles.
+    const HEADER_RE = /^(⚽\\s*)?F[uú]tbol\\s*\\//i;
+    const isVisible = (el) => !!el.offsetParent || el === document.body;
+
+    const headerTextOf = (el) => {
+        if (!el || !isVisible(el)) return null;
+        const text = (el.innerText || '').trim();
+        if (text && text.length <= 80 && text.indexOf('\\n') === -1 && HEADER_RE.test(text)) {
+            return text;
         }
-        node = walker.nextNode();
-    }
+        return null;
+    };
+
+    const findCompetition = (rowEl) => {
+        let ancestor = rowEl;
+        for (let depth = 0; depth < 10 && ancestor; depth++) {
+            let sib = ancestor.previousElementSibling;
+            for (let hop = 0; hop < 30 && sib; hop++) {
+                const direct = headerTextOf(sib);
+                if (direct) return direct;
+                // El encabezado tambien puede estar anidado dentro del
+                // hermano anterior (no ser el mismo nodo de texto).
+                if (isVisible(sib)) {
+                    const nested = sib.querySelector ? sib.querySelector('*') : null;
+                    if (nested) {
+                        const all = sib.querySelectorAll('*');
+                        for (let k = all.length - 1; k >= 0; k--) {
+                            const found = headerTextOf(all[k]);
+                            if (found) return found;
+                        }
+                    }
+                }
+                sib = sib.previousElementSibling;
+            }
+            ancestor = ancestor.parentElement;
+        }
+        return '';
+    };
+
+    const teams = [];
+    document.querySelectorAll('.KambiBC-event-participants__name-participant-name').forEach(el => {
+        if (!isVisible(el)) return;
+        const rect = el.getBoundingClientRect();
+        teams.push({
+            y: rect.top + window.scrollY,
+            vx: rect.left + rect.width / 2,
+            vy: rect.top + rect.height / 2,
+            text: (el.innerText || '').trim(),
+            competition: findCompetition(el),
+        });
+    });
     return {teams};
 }
 """
@@ -370,53 +399,80 @@ _EXCLUDED_HEADING_RE = re.compile(r"hándicap|handicap|goleador|anotador|primer 
 
 def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
     """Lee los mercados de goles/tarjetas/tiros de esquina (total y por
-    equipo) actualmente visibles en la pestana activa de la pagina del
-    partido."""
+    equipo) en la pestana activa de la pagina del partido. La pagina
+    virtualiza esta seccion: el mercado "Total de X" siempre aparece
+    primero, pero los mercados POR EQUIPO estan mas abajo y no entran al
+    DOM hasta scrollear ahi. Antes se paraba de scrollear en cuanto
+    aparecia el primer encabezado (el de "Total de..."), perdiendo los de
+    equipo. Ahora se sigue scrolleando y recolectando hasta que dejan de
+    aparecer encabezados nuevos."""
     _scroll_into_markets(page)
-    headings = page.locator(_MARKET_HEADING_RE)
-    for i in range(headings.count()):
-        heading = headings.nth(i)
-        try:
-            market_name = heading.inner_text(timeout=1000).strip()
-        except Exception:
-            continue
-        # Si el "encabezado" en realidad es un contenedor grande (varias
-        # lineas), el texto va a ser largo y con saltos de linea -- no es
-        # un encabezado real, se descarta para no procesar bloques enteros
-        # como si fueran un solo titulo.
-        if not market_name or len(market_name) > 80 or "\n" in market_name:
-            continue
-        if _EXCLUDED_HEADING_RE.search(market_name):
-            continue
-        # El heading no tiene un following-sibling util: en el DOM real de
-        # Kambi, heading y filas viven dentro de un ancestro comun con la
-        # clase 'KambiBC-bet-offer-subcategory__container' (confirmado
-        # inspeccionando el DOM real con Playwright).
-        container = heading.locator(
-            "xpath=ancestor::*[contains(@class,'KambiBC-bet-offer-subcategory__container')][1]"
-        )
-        if container.count() == 0:
-            continue
-        show_list = container.first.locator("text=/Mostrar la lista|Ver m[aá]s/i").first
-        if show_list.count() > 0:
+    seen_lines: set[tuple[str, str, float]] = {(l.market, l.selection, l.odds) for l in lines}
+    seen_markets: set[str] = set()
+    stable = 0
+    for _ in range(40):
+        headings = page.locator(_MARKET_HEADING_RE)
+        new_market_found = False
+        for i in range(headings.count()):
+            heading = headings.nth(i)
             try:
-                show_list.click(timeout=1000)
-                page.wait_for_timeout(400)
+                market_name = heading.inner_text(timeout=1000).strip()
             except Exception:
-                pass
-        try:
-            block_text = container.first.inner_text(timeout=1000)
-        except Exception:
-            continue
-        for direction, line_val, odds_val in _parse_market_rows(block_text):
-            try:
-                odds = float(odds_val.replace(",", "."))
-            except ValueError:
                 continue
-            if odds >= MIN_ODDS:
-                lines.append(
-                    MarketLine(market=market_name, selection=f"{direction} {line_val}", odds=odds)
-                )
+            # Si el "encabezado" en realidad es un contenedor grande (varias
+            # lineas), el texto va a ser largo y con saltos de linea -- no es
+            # un encabezado real, se descarta para no procesar bloques enteros
+            # como si fueran un solo titulo.
+            if not market_name or len(market_name) > 80 or "\n" in market_name:
+                continue
+            if _EXCLUDED_HEADING_RE.search(market_name):
+                continue
+            if market_name in seen_markets:
+                continue
+            seen_markets.add(market_name)
+            new_market_found = True
+            # El heading no tiene un following-sibling util: en el DOM real de
+            # Kambi, heading y filas viven dentro de un ancestro comun con la
+            # clase 'KambiBC-bet-offer-subcategory__container' (confirmado
+            # inspeccionando el DOM real con Playwright).
+            container = heading.locator(
+                "xpath=ancestor::*[contains(@class,'KambiBC-bet-offer-subcategory__container')][1]"
+            )
+            if container.count() == 0:
+                continue
+            show_list = container.first.locator("text=/Mostrar la lista|Ver m[aá]s/i").first
+            if show_list.count() > 0:
+                try:
+                    show_list.click(timeout=1000)
+                    page.wait_for_timeout(400)
+                except Exception:
+                    pass
+            try:
+                block_text = container.first.inner_text(timeout=1000)
+            except Exception:
+                continue
+            for direction, line_val, odds_val in _parse_market_rows(block_text):
+                try:
+                    odds = float(odds_val.replace(",", "."))
+                except ValueError:
+                    continue
+                if odds >= MIN_ODDS:
+                    key = (market_name, f"{direction} {line_val}", odds)
+                    if key in seen_lines:
+                        continue
+                    seen_lines.add(key)
+                    lines.append(
+                        MarketLine(market=market_name, selection=f"{direction} {line_val}", odds=odds)
+                    )
+
+        if new_market_found:
+            stable = 0
+        else:
+            stable += 1
+            if stable >= 4:
+                break
+        page.evaluate("window.scrollBy(0, 600)")
+        page.wait_for_timeout(400)
 
 
 def _extract_market_lines(page) -> list[MarketLine]:
