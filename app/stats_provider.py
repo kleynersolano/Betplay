@@ -18,6 +18,7 @@ HEADERS = {"x-apisports-key": API_FOOTBALL_KEY}
 class TeamMatchStats:
     corners: float | None
     goals: float
+    goals_against: float | None
     cards: float | None
 
 
@@ -26,6 +27,7 @@ class TeamForm:
     team_name: str
     venue: str
     samples: list[TeamMatchStats]
+    context: str | None = None
 
     @property
     def valid(self) -> bool:
@@ -47,7 +49,9 @@ def _find_team_id(team_name: str) -> int | None:
     return results[0]["team"]["id"] if results else None
 
 
-def get_team_form(team_name: str, venue: str, last_n: int = 10) -> TeamForm | None:
+def get_team_form(
+    team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
+) -> TeamForm | None:
     if not API_FOOTBALL_KEY:
         return None
     team_id = _find_team_id(team_name)
@@ -99,12 +103,15 @@ def _fixture_team_stats(fixture_id: int, team_id: int) -> TeamMatchStats | None:
     goals_resp.raise_for_status()
     fx_data = goals_resp.json().get("response", [])
     goals = 0.0
+    goals_against = 0.0
     if fx_data:
         goals_block = fx_data[0]["goals"]
         is_home = fx_data[0]["teams"]["home"]["id"] == team_id
         goals = (goals_block["home"] if is_home else goals_block["away"]) or 0
+        goals_against = (goals_block["away"] if is_home else goals_block["home"]) or 0
     return TeamMatchStats(
         corners=float(corners) if corners is not None else None,
         goals=float(goals),
+        goals_against=float(goals_against),
         cards=float(cards),
     )

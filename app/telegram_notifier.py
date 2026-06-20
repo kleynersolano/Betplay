@@ -30,6 +30,12 @@ def format_evaluations(evaluations: list[BetEvaluation]) -> str:
             f"{i}. {ev.market} -- {ev.selection} | cuota {ev.odds:.2f} | "
             f"prob {ev.prob_real*100:.1f}% | value {ev.value_percent:.1f}%"
         )
+
+    first = evaluations[0]
+    if first.home_context:
+        lines.append(f"\n_{m.home_team}_: {first.home_context}")
+    if first.away_context:
+        lines.append(f"_{m.away_team}_: {first.away_context}")
     return "\n".join(lines)
 
 

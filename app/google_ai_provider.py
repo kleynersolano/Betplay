@@ -26,15 +26,33 @@ from app.stats_provider import TeamForm, TeamMatchStats
 
 log = logging.getLogger("betbot.google_ai")
 
-PROMPT_TEMPLATE = """Eres un asistente de datos deportivos. Busca en internet, consultando \
+_STATS_INSTRUCTIONS = """Para cada partido dame: goles anotados por "{team}" (goals_for), \
+goles recibidos por "{team}" (goals_against), tarjetas (amarillas+rojas) recibidas por \
+"{team}" (cards), y corners a favor de "{team}" (corners, null si no hay dato). Ademas, dame \
+un campo "context" con un resumen breve (maximo 2 frases) del contexto reciente de "{team}" \
+relevante para apostar (lesiones de jugadores clave, racha de resultados, motivacion del \
+partido, suspendidos). Responde UNICAMENTE con un JSON valido, sin texto adicional, con esta \
+forma exacta:
+{{"context": "<resumen breve o cadena vacia>", "matches": [{{"goals_for": <numero>, \
+"goals_against": <numero>, "cards": <numero o null>, "corners": <numero o null>}}, ...]}}
+"""
+
+PROMPT_TEMPLATE_CLUB = """Eres un asistente de datos deportivos. Busca en internet, consultando \
 hasta 5 fuentes confiables (por ejemplo Sofascore, Flashscore, WhoScored, FootyStats, FBref) \
 sin que yo necesite entrar a ninguna de esas paginas, las estadisticas de los ultimos {n} \
-partidos del equipo "{team}" jugando de {venue} en su liga local. Para cada partido dame: \
-goles anotados por "{team}", tarjetas (amarillas+rojas) recibidas por "{team}", y corners a \
-favor de "{team}" (si no hay dato de corners, usa null). Responde UNICAMENTE con un JSON \
-valido, sin texto adicional, con esta forma exacta:
-{{"matches": [{{"goals": <numero>, "cards": <numero o null>, "corners": <numero o null>}}, ...]}}
-"""
+partidos del equipo "{team}" jugando de {venue} en su liga local.
+""" + _STATS_INSTRUCTIONS
+
+# Las selecciones nacionales no tienen "liga local" (juegan eliminatorias,
+# mundiales, amistosos, copas continentales): pedirles eso devuelve
+# respuestas vacias, como paso con Alemania. Para estas se pide simplemente
+# sus ultimos partidos oficiales con la seleccion, sin filtrar por venue/liga.
+PROMPT_TEMPLATE_NATIONAL = """Eres un asistente de datos deportivos. Busca en internet, \
+consultando hasta 5 fuentes confiables (por ejemplo Sofascore, Flashscore, WhoScored, \
+FootyStats, FBref) sin que yo necesite entrar a ninguna de esas paginas, las estadisticas \
+de los ultimos {n} partidos oficiales (eliminatorias, mundial, copas continentales, \
+amistosos) de la seleccion nacional de "{team}".
+""" + _STATS_INSTRUCTIONS
 
 
 def _extract_json(text: str) -> dict | None:
@@ -102,8 +120,13 @@ def _ask_google_ai_mode(prompt: str) -> str | None:
             context.close()
 
 
-def get_team_form(team_name: str, venue: str, last_n: int = 10) -> TeamForm | None:
-    prompt = PROMPT_TEMPLATE.format(n=last_n, team=team_name, venue=venue)
+def get_team_form(
+    team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
+) -> TeamForm | None:
+    if is_national_team:
+        prompt = PROMPT_TEMPLATE_NATIONAL.format(n=last_n, team=team_name)
+    else:
+        prompt = PROMPT_TEMPLATE_CLUB.format(n=last_n, team=team_name, venue=venue)
     try:
         raw = _ask_google_ai_mode(prompt)
     except Exception:
@@ -117,11 +140,13 @@ def get_team_form(team_name: str, venue: str, last_n: int = 10) -> TeamForm | No
     samples = [
         TeamMatchStats(
             corners=float(m["corners"]) if m.get("corners") is not None else None,
-            goals=float(m.get("goals", 0)),
+            goals=float(m.get("goals_for", 0)),
+            goals_against=float(m["goals_against"]) if m.get("goals_against") is not None else None,
             cards=float(m["cards"]) if m.get("cards") is not None else None,
         )
         for m in data.get("matches", [])[:last_n]
     ]
     if len(samples) < MIN_VALID_MATCHES:
         return None
-    return TeamForm(team_name=team_name, venue=venue, samples=samples)
+    context = (data.get("context") or "").strip() or None
+    return TeamForm(team_name=team_name, venue=venue, samples=samples, context=context)

@@ -48,18 +48,34 @@ with sync_playwright() as p:
     home, away, competition, vx, vy = target
     print(f"Entrando a: {home} vs {away} | liga: {competition}")
     page.mouse.click(vx, vy)
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(4000)
 
-    print("\n--- TODO el texto visible de la pagina (pestana inicial) ---")
-    print(page.locator("body").inner_text())
+    print(f"\n--- Frames de la pagina: {len(page.frames)} ---")
+    for fr in page.frames:
+        print(f"  url={fr.url!r}")
 
-    combined_tab = page.locator("text=/Tarjetas y Tiros de Esquina/i").first
+    for fr in page.frames:
+        try:
+            text = fr.locator("body").inner_text(timeout=2000)
+        except Exception:
+            continue
+        if "Resultado Final" in text or "Total de goles" in text:
+            print(f"\n--- Contenido del partido encontrado en frame {fr.url!r} ---")
+            print(text)
+            target_frame = fr
+            break
+    else:
+        target_frame = page.main_frame
+        print("\n--- No se encontro 'Resultado Final' en ningun frame; texto del frame principal ---")
+        print(page.locator("body").inner_text())
+
+    combined_tab = target_frame.locator("text=/Tarjetas y Tiros de Esquina/i").first
     print(f"\n¿Existe pestana 'Tarjetas y Tiros de Esquina'? {combined_tab.count() > 0}")
     if combined_tab.count() > 0:
         combined_tab.click()
         page.wait_for_timeout(1500)
         print("\n--- TODO el texto visible tras click en 'Tarjetas y Tiros de Esquina' ---")
-        print(page.locator("body").inner_text())
+        print(target_frame.locator("body").inner_text())
 
     input("\n[ENTER para cerrar el navegador]")
     browser.close()

@@ -29,6 +29,13 @@ MIN_ODDS = float(os.getenv("MIN_ODDS", "2.0"))
 MIN_VALUE_PERCENT = float(os.getenv("MIN_VALUE_PERCENT", "5.0"))
 MIN_VALID_MATCHES = int(os.getenv("MIN_VALID_MATCHES", "6"))
 
+# Competiciones donde juegan selecciones nacionales (no clubes), usadas para
+# pedirle a Google AI Mode estadisticas de "ultimos partidos oficiales" en
+# vez de "ultimos partidos en su liga local" (las selecciones no tienen liga).
+NATIONAL_TEAM_COMPETITION_KEYWORDS = [
+    "mundial", "world cup", "eliminatoria", "copa america", "eurocopa", "euro",
+]
+
 VALID_COMPETITIONS_KEYWORDS = [
     "mundial", "world cup", "eliminatoria", "champions league", "europa league",
     "conference league", "premier league", "la liga", "laliga", "serie a",

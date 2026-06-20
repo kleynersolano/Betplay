@@ -28,7 +28,9 @@ def _find_team_id(team_name: str) -> int | None:
     return results[0]["id"] if results else None
 
 
-def get_team_form(team_name: str, venue: str, last_n: int = 10) -> TeamForm | None:
+def get_team_form(
+    team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
+) -> TeamForm | None:
     if not FOOTBALL_DATA_API_KEY:
         return None
     team_id = _find_team_id(team_name)
@@ -50,7 +52,12 @@ def get_team_form(team_name: str, venue: str, last_n: int = 10) -> TeamForm | No
             continue
         score = m.get("score", {}).get("fullTime", {})
         goals = (score.get("home") if is_home else score.get("away")) or 0
-        samples.append(TeamMatchStats(corners=None, goals=float(goals), cards=None))
+        goals_against = (score.get("away") if is_home else score.get("home")) or 0
+        samples.append(
+            TeamMatchStats(
+                corners=None, goals=float(goals), goals_against=float(goals_against), cards=None
+            )
+        )
         if len(samples) >= last_n:
             break
     if len(samples) < MIN_VALID_MATCHES:

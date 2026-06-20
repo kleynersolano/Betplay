@@ -20,11 +20,13 @@ log = logging.getLogger("betbot")
 STAT_PROVIDERS = [google_ai_provider.get_team_form]
 
 
-def _get_team_form_with_fallback(team_name: str, venue: str) -> TeamForm | None:
+def _get_team_form_with_fallback(
+    team_name: str, venue: str, is_national_team: bool = False
+) -> TeamForm | None:
     best: TeamForm | None = None
     for provider in STAT_PROVIDERS:
         try:
-            form = provider(team_name, venue=venue)
+            form = provider(team_name, venue=venue, is_national_team=is_national_team)
         except Exception:
             log.exception("Fallo consultando %s para %s", provider.__module__, team_name)
             continue
@@ -44,8 +46,12 @@ def run_cycle() -> None:
     log.info("Partidos validos encontrados: %d", len(matches))
     for match in matches:
         try:
-            home_form = _get_team_form_with_fallback(match.home_team, venue="home")
-            away_form = _get_team_form_with_fallback(match.away_team, venue="away")
+            home_form = _get_team_form_with_fallback(
+                match.home_team, venue="home", is_national_team=match.is_national_team_match
+            )
+            away_form = _get_team_form_with_fallback(
+                match.away_team, venue="away", is_national_team=match.is_national_team_match
+            )
             evaluations = evaluate_match(match, home_form, away_form)
             if evaluations:
                 notify_match_results(evaluations)

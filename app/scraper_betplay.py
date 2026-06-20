@@ -21,6 +21,7 @@ from app.config import (
     EXCLUDED_KEYWORDS,
     HOURS_AHEAD,
     MIN_ODDS,
+    NATIONAL_TEAM_COMPETITION_KEYWORDS,
     VALID_COMPETITIONS_KEYWORDS,
 )
 
@@ -50,6 +51,11 @@ class Match:
         if any(bad in comp for bad in EXCLUDED_KEYWORDS):
             return False
         return any(good in comp for good in VALID_COMPETITIONS_KEYWORDS)
+
+    @property
+    def is_national_team_match(self) -> bool:
+        comp = self.competition.lower()
+        return any(kw in comp for kw in NATIONAL_TEAM_COMPETITION_KEYWORDS)
 
 
 def _click_text(page, pattern: str, exact: bool = False) -> bool:

@@ -36,6 +36,8 @@ class BetEvaluation:
     odds: float
     prob_real: float
     value_percent: float
+    home_context: str | None = None
+    away_context: str | None = None
 
 
 def _poisson_over_prob(lam: float, line: float) -> float:
@@ -106,6 +108,8 @@ def evaluate_match(
                     odds=line.odds,
                     prob_real=prob_real,
                     value_percent=value_percent,
+                    home_context=home_form.context,
+                    away_context=away_form.context,
                 )
             )
 
