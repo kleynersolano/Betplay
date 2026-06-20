@@ -28,7 +28,11 @@ def _stat_for_market(market: str) -> str | None:
         return "goals"
     return None
 
-USES_POISSON = {"goals", "cards"}
+# Goles, tarjetas y tiros de esquina son datos de CONTEO (numero de
+# eventos por partido), por lo que la distribucion de Poisson aplica a los
+# tres. Antes los corners usaban una aproximacion lineal cruda; se pasan a
+# Poisson para seguir la misma metodologia cuantitativa que el resto.
+USES_POISSON = {"goals", "cards", "corners"}
 
 
 @dataclass
@@ -167,10 +171,18 @@ def evaluate_match(
             match.home_team, match.away_team, len(match.lines),
         )
 
-    # Se eligen las mejores apuestas por valor real (value_percent), pero
-    # se devuelven ordenadas segun la prioridad de analisis pedida:
-    # tiros de esquina primero, luego goles, luego tarjetas.
-    evaluations.sort(key=lambda e: e.value_percent, reverse=True)
-    best = evaluations[:3]
-    best.sort(key=lambda e: MARKET_PRIORITY.index(e.stat) if e.stat in MARKET_PRIORITY else len(MARKET_PRIORITY))
-    return best
+    # Se ordenan TODAS las apuestas validas (cuota>=2.0 y value>=umbral)
+    # por Probabilidad Real descendente y se toman las 3 mejores, segun la
+    # metodologia pedida ("Ordena TODAS las apuestas validas por Prob.Real
+    # mayor a menor, selecciona TOP 3"). Ante empate de probabilidad se
+    # desempata por value% y luego por la prioridad de mercado
+    # (esquinas > goles > tarjetas).
+    evaluations.sort(
+        key=lambda e: (
+            e.prob_real,
+            e.value_percent,
+            -(MARKET_PRIORITY.index(e.stat) if e.stat in MARKET_PRIORITY else len(MARKET_PRIORITY)),
+        ),
+        reverse=True,
+    )
+    return evaluations[:3]
