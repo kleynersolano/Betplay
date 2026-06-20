@@ -456,7 +456,11 @@ def _scroll_into_markets(page, max_scrolls: int = 40) -> None:
 # EMPIEZAN con estas palabras) pero ahora sin exigir el prefijo "Total
 # de", para cubrir variantes por equipo como "Tiros de Esquina - Alemania".
 _MARKET_HEADING_RE = "text=/^(Total de )?(Tiros de Esquina|Goles|Tarjetas)\\b/i"
-_EXCLUDED_HEADING_RE = re.compile(r"hándicap|handicap|goleador|anotador|primer gol|[uú]ltimo gol", re.I)
+_EXCLUDED_HEADING_RE = re.compile(
+    r"hándicap|handicap|goleador|anotador|primer gol|[uú]ltimo gol"
+    r"|tiempo|mitad|1[eé]r|2d[oa]|primera|segunda",
+    re.I,
+)
 
 
 def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
