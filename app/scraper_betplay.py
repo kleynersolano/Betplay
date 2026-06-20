@@ -142,6 +142,9 @@ def fetch_upcoming_matches() -> list[Match]:
     (mouse.click) en vez de buscar por texto, porque nombres de equipo como
     "Países Bajos" se repiten muchas veces (esports) y un buscador por texto
     podria clicar la fila equivocada."""
+    class _BrowserDied(Exception):
+        pass
+
     matches: list[Match] = []
     seen_pairs: set[tuple[str, str]] = set()
     header_positions: list[tuple[float, str]] = []
@@ -188,13 +191,23 @@ def fetch_upcoming_matches() -> list[Match]:
             except Exception:
                 log.warning("  No se pudo entrar al partido %s vs %s", home, away)
                 continue
-            if not _wait_for_match_page(page):
-                log.warning("  La pagina del partido %s vs %s no termino de cargar", home, away)
-            match.lines = _extract_market_lines(page)
-            log.info("  -> %d cuotas extraidas", len(match.lines))
-            matches.append(match)
-            page.go_back(timeout=10_000)
-            page.wait_for_timeout(1200)
+            try:
+                if not _wait_for_match_page(page):
+                    log.warning("  La pagina del partido %s vs %s no termino de cargar", home, away)
+                match.lines = _extract_market_lines(page)
+                log.info("  -> %d cuotas extraidas", len(match.lines))
+                matches.append(match)
+                page.go_back(timeout=10_000)
+                page.wait_for_timeout(1200)
+            except Exception:
+                # El navegador puede crashear/cerrarse tras varias
+                # navegaciones seguidas; se descarta este partido y se
+                # detiene la cosecha en curso, pero se conservan los
+                # partidos ya encontrados en vez de tumbar todo el ciclo.
+                log.warning(
+                    "  Error inesperado procesando %s vs %s, se detiene la busqueda", home, away
+                )
+                raise _BrowserDied()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=BETPLAY_HEADLESS, slow_mo=150 if not BETPLAY_HEADLESS else 0)
@@ -207,20 +220,23 @@ def fetch_upcoming_matches() -> list[Match]:
         _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
         page.wait_for_timeout(1000)
 
-        harvest_and_process(page)
-        previous_height = -1
-        stable = 0
-        for _ in range(60):
-            current_height = page.evaluate("document.body.scrollHeight")
-            page.mouse.wheel(0, 1200)
-            page.wait_for_timeout(350)
+        try:
             harvest_and_process(page)
-            if current_height == previous_height:
-                stable += 1
-                if stable >= 3:
-                    break
-            else:
-                stable = 0
+            previous_height = -1
+            stable = 0
+            for _ in range(60):
+                current_height = page.evaluate("document.body.scrollHeight")
+                page.mouse.wheel(0, 1200)
+                page.wait_for_timeout(350)
+                harvest_and_process(page)
+                if current_height == previous_height:
+                    stable += 1
+                    if stable >= 3:
+                        break
+                else:
+                    stable = 0
+        except _BrowserDied:
+            pass
             previous_height = current_height
 
         browser.close()
@@ -335,6 +351,11 @@ def _extract_market_lines(page) -> list[MarketLine]:
     if combined_tab.count() > 0:
         combined_tab.click()
         page.wait_for_timeout(800)
+
+        corners_subtab = page.locator("text=/^Tiros de Esquina$/i").first
+        if corners_subtab.count() > 0:
+            corners_subtab.click()
+            page.wait_for_timeout(800)
         page.evaluate("window.scrollTo(0, 0)")
         _collect_visible_markets(page, lines)
 
