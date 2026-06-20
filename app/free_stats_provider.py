@@ -24,6 +24,7 @@ import unicodedata
 
 import requests
 
+from app import football_data_provider
 from app.stats_provider import TeamForm
 
 log = logging.getLogger("betbot.free_stats")
@@ -107,7 +108,7 @@ def _avg(values: list[float]) -> float | None:
 # --------------------------------------------------------------------------
 # Fuente 1: Sofascore
 # --------------------------------------------------------------------------
-def _sofascore(team_name: str, venue: str, last_n: int) -> dict | None:
+def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     data = _get_json("https://api.sofascore.com/api/v1/search/all", {"q": team_name})
     if not data:
         return None
@@ -180,7 +181,7 @@ def _sofascore(team_name: str, venue: str, last_n: int) -> dict | None:
 # --------------------------------------------------------------------------
 # Fuente 2: FotMob
 # --------------------------------------------------------------------------
-def _fotmob(team_name: str, venue: str, last_n: int) -> dict | None:
+def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     search = _get_json("https://www.fotmob.com/api/searchData", {"term": team_name})
     if not search:
         return None
@@ -229,7 +230,7 @@ def _fotmob(team_name: str, venue: str, last_n: int) -> dict | None:
 # --------------------------------------------------------------------------
 # Fuente 3: TheSportsDB (key publica de prueba "3")
 # --------------------------------------------------------------------------
-def _thesportsdb(team_name: str, venue: str, last_n: int) -> dict | None:
+def _thesportsdb(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     search = _get_json(
         "https://www.thesportsdb.com/api/v1/json/3/searchteams.php", {"t": team_name}
     )
@@ -263,31 +264,92 @@ def _thesportsdb(team_name: str, venue: str, last_n: int) -> dict | None:
     return {"source": "thesportsdb", "goals": _avg(gf), "goals_against": _avg(ga)}
 
 
+# --------------------------------------------------------------------------
+# Fuente 4: football-data.org (API con key gratuita ya configurada)
+# --------------------------------------------------------------------------
+def _football_data(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
+    form = football_data_provider.get_team_form(
+        team_name, venue=venue, last_n=last_n, is_national_team=is_national_team
+    )
+    if form is None:
+        return None
+    g = form.average("goals")
+    if g is None:
+        return None
+    out = {"source": "football-data", "goals": g}
+    ga = form.average("goals_against")
+    if ga is not None:
+        out["goals_against"] = ga
+    return out
+
+
+# Todas las fuentes gratis conectadas. Sirve para TODO el futbol (clubes y
+# selecciones, cualquier liga/pais), no solo el Mundial: las 4 tienen
+# cobertura mundial. Si una falla, se usan las demas. Para agregar otra
+# fuente basta sumar (nombre, funcion) aqui.
+_SOURCES = [
+    ("sofascore", _sofascore),
+    ("fotmob", _fotmob),
+    ("thesportsdb", _thesportsdb),
+    ("football-data", _football_data),
+]
+
+
 def get_team_form(
     team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
 ) -> TeamForm | None:
-    """Consulta las 3 fuentes y promedia cada estadistica entre las que
-    respondieron."""
+    """Consulta TODAS las fuentes y promedia cada estadistica entre las que
+    respondieron. Registra en el log que fuentes se consultaron, cuales
+    dieron informacion y cuales no (para detectar y corregir fallas)."""
+    # Para selecciones se traduce el nombre a ingles (Sofascore/FotMob/
+    # TheSportsDB buscan en ingles); football-data recibe el nombre original
+    # porque maneja su propia busqueda.
     query = _search_name(team_name, is_national_team)
+
     results: list[dict] = []
-    for fn in (_sofascore, _fotmob, _thesportsdb):
+    consultadas: list[str] = []
+    con_datos: list[str] = []
+    sin_datos: list[str] = []
+
+    for source_name, fn in _SOURCES:
+        consultadas.append(source_name)
+        # football-data usa su propia busqueda con el nombre original; las
+        # demas usan el nombre traducido.
+        name_for_source = team_name if source_name == "football-data" else query
         try:
-            r = fn(query, venue, last_n)
+            r = fn(name_for_source, venue, last_n, is_national_team)
         except Exception:
+            log.warning("    [%s] %s: error al consultar", source_name, team_name, exc_info=True)
             r = None
-        if r:
+        if r and r.get("goals") is not None:
             results.append(r)
-            log.info(
-                "    %s: %s -> goles=%.2f%s", team_name, r["source"], r["goals"],
-                (", corners=%.2f" % r["corners"]) if r.get("corners") else "",
-            )
+            con_datos.append(source_name)
+            detalle = "goles=%.2f" % r["goals"]
+            if r.get("goals_against") is not None:
+                detalle += " | recibidos=%.2f" % r["goals_against"]
+            if r.get("corners") is not None:
+                detalle += " | corners=%.2f" % r["corners"]
+            if r.get("cards") is not None:
+                detalle += " | tarjetas=%.2f" % r["cards"]
+            log.info("    [%s] %s -> %s", source_name, team_name, detalle)
+        else:
+            sin_datos.append(source_name)
+            log.info("    [%s] %s -> SIN DATOS", source_name, team_name)
+
+    log.info(
+        "    RESUMEN %s | consultadas: %s | con datos: %s | sin datos: %s",
+        team_name,
+        ", ".join(consultadas) or "(ninguna)",
+        ", ".join(con_datos) or "(ninguna)",
+        ", ".join(sin_datos) or "(ninguna)",
+    )
 
     if not results:
-        log.warning("    %s: ninguna fuente gratis respondio", team_name)
+        log.warning("    %s: NINGUNA fuente dio datos", team_name)
         return None
 
     # Promedio entre fuentes por estadistica (suma / cantidad de fuentes que
-    # la trajeron).
+    # la trajeron), como se pidio.
     overrides: dict[str, float] = {}
     for attr in ("goals", "goals_against", "corners", "cards"):
         vals = [r[attr] for r in results if r.get(attr) is not None]
@@ -297,11 +359,10 @@ def get_team_form(
     if "goals" not in overrides:
         return None
 
-    sources = ", ".join(r["source"] for r in results)
     return TeamForm(
         team_name=team_name,
         venue=venue,
         samples=[],
-        context=f"Fuentes (promediadas): {sources}",
+        context="Fuentes (promediadas): " + ", ".join(con_datos),
         overrides=overrides,
     )

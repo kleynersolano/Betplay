@@ -4,7 +4,7 @@ import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import football_data_provider, free_stats_provider, google_search_provider
+from app import free_stats_provider, google_search_provider
 from app.analysis import evaluate_match
 from app.config import RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
@@ -18,50 +18,25 @@ log = logging.getLogger("betbot")
 def _get_team_form_with_fallback(
     team_name: str, venue: str, is_national_team: bool = False
 ) -> TeamForm | None:
-    """Estrategia de datos: rapida, real y confiable primero, con respaldos.
+    """Estrategia de datos: rapida, real y confiable primero, con respaldo.
 
-    1) free_stats_provider: 3 fuentes gratis SIN registro (Sofascore, FotMob,
-       TheSportsDB) por API JSON directa, promediadas. Dan goles, tiros de
-       esquina y tarjetas reales por partido. Es la fuente principal: rapida
-       (sin navegador) y confiable (datos oficiales, no estimaciones).
-    2) football-data.org (API, requiere key ya configurada): respaldo de
-       GOLES si las fuentes gratis no cubrieron la competicion.
-    3) Busqueda en Google (navegador, lento): ultimo recurso para ligas
-       exoticas que ninguna API cubra.
-
-    En todos los casos, si football-data tiene goles se usan ESOS para el
-    mercado de goles (datos oficiales) por encima del resto."""
-    fd_form: TeamForm | None = None
-    try:
-        fd_form = football_data_provider.get_team_form(
-            team_name, venue=venue, is_national_team=is_national_team
-        )
-    except Exception:
-        log.exception("Fallo consultando football-data para %s", team_name)
-
-    fd_goals = fd_form.average("goals") if fd_form else None
-    fd_goals_against = fd_form.average("goals_against") if fd_form else None
-
-    def _anchor_goals(form: TeamForm) -> TeamForm:
-        # Si football-data dio goles oficiales, se anclan por encima de la
-        # estimacion de otras fuentes (mas confiable para el mercado clave).
-        if fd_goals is not None:
-            form.overrides["goals"] = fd_goals
-            if fd_goals_against is not None:
-                form.overrides["goals_against"] = fd_goals_against
-        return form
-
-    # 1) Fuentes gratis sin registro (principal).
+    1) free_stats_provider: 4 fuentes (Sofascore, FotMob, TheSportsDB y
+       football-data.org) por API JSON directa, PROMEDIADAS. Cubren TODO el
+       futbol (clubes y selecciones, cualquier liga), no solo el Mundial.
+       Dan goles, tiros de esquina y tarjetas reales por partido. Es la
+       fuente principal: rapida (sin navegador) y confiable.
+    2) Busqueda en Google (navegador, lento): ultimo recurso para ligas
+       exoticas que ninguna API cubra."""
+    # 1) Fuentes por API, promediadas (principal).
     try:
         free_form = free_stats_provider.get_team_form(
             team_name, venue=venue, is_national_team=is_national_team
         )
     except Exception:
-        log.exception("Fallo consultando fuentes gratis para %s", team_name)
+        log.exception("Fallo consultando fuentes de estadisticas para %s", team_name)
         free_form = None
     if free_form is not None and free_form.valid:
-        log.info("    %s: fuentes gratis (Sofascore/FotMob/TheSportsDB)", team_name)
-        return _anchor_goals(free_form)
+        return free_form
 
     # 2) Google como ultimo recurso (navegador).
     try:
@@ -72,13 +47,8 @@ def _get_team_form_with_fallback(
         log.exception("Fallo consultando Google para %s", team_name)
         g_form = None
     if g_form is not None:
-        log.info("    %s: Google (respaldo)", team_name)
-        return _anchor_goals(g_form)
-
-    # 3) Solo football-data (solo serviran mercados de goles).
-    if fd_form is not None and fd_form.valid:
-        log.info("    %s: solo football-data", team_name)
-        return fd_form
+        log.info("    %s: Google (ultimo recurso)", team_name)
+        return g_form
     return None
 
 
