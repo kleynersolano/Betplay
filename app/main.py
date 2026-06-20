@@ -2,20 +2,22 @@ import logging
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import football_data_provider, google_ai_provider
+from app import google_ai_provider
 from app.analysis import evaluate_match
 from app.config import RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
-from app.stats_provider import TeamForm, get_team_form
+from app.stats_provider import TeamForm
 from app.telegram_notifier import notify_match_results, send_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("betbot")
 
-# Orden de fuentes de estadisticas: API-Football (principal) -> football-data.org
-# (segunda fuente gratuita) -> Google AI (hasta 5 fuentes via busqueda, sin entrar
-# a las paginas). Se detiene en la primera fuente que devuelva datos validos.
-STAT_PROVIDERS = [get_team_form, football_data_provider.get_team_form, google_ai_provider.get_team_form]
+# Por ahora solo se usa Google AI Mode como fuente de estadisticas (a pedido
+# explicito, mientras se valida que el bot funcione de punta a punta). Para
+# reactivar API-Football y football-data.org como fuentes previas, agregar
+# get_team_form (de app.stats_provider) y football_data_provider.get_team_form
+# al inicio de esta lista.
+STAT_PROVIDERS = [google_ai_provider.get_team_form]
 
 
 def _get_team_form_with_fallback(team_name: str, venue: str) -> TeamForm | None:
