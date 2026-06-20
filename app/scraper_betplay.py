@@ -240,6 +240,8 @@ def fetch_upcoming_matches() -> list[Match]:
                     log.warning("  La pagina del partido %s vs %s no termino de cargar", home, away)
                 match.lines = _extract_market_lines(page)
                 log.info("  -> %d cuotas extraidas", len(match.lines))
+                for line in match.lines:
+                    log.info("     · %s | %s @ %.2f", line.market, line.selection, line.odds)
                 matches.append(match)
                 return_to_listing(page)
                 # El DOM del listado se reseteo por completo (volvimos al
