@@ -12,17 +12,18 @@ from app.config import MIN_VALUE_PERCENT
 from app.scraper_betplay import Match, MarketLine
 from app.stats_provider import TeamForm
 
-MARKET_TO_STAT = {
-    "Tiros de esquina totales": "corners",
-    "Corners Equipo A": "corners",
-    "Corners Equipo B": "corners",
-    "Goles totales": "goals",
-    "Goles Equipo A": "goals",
-    "Goles Equipo B": "goals",
-    "Tarjetas totales": "cards",
-    "Tarjetas Equipo A": "cards",
-    "Tarjetas Equipo B": "cards",
-}
+def _stat_for_market(market: str) -> str | None:
+    """Clasifica un nombre de mercado real de BetPlay (puede incluir el
+    nombre del equipo, ej. 'Total de goles de Suecia') segun la estadistica
+    que mide."""
+    m = market.lower()
+    if "esquina" in m:
+        return "corners"
+    if "tarjeta" in m:
+        return "cards"
+    if "gol" in m:
+        return "goals"
+    return None
 
 USES_POISSON = {"goals", "cards"}
 
@@ -70,7 +71,7 @@ def evaluate_match(
 
     evaluations: list[BetEvaluation] = []
     for line in match.lines:
-        stat = MARKET_TO_STAT.get(line.market)
+        stat = _stat_for_market(line.market)
         if stat is None:
             continue
 

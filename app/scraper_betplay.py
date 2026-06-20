@@ -10,6 +10,7 @@ reales con el inspector del navegador si algo deja de funcionar.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass, field
 
 from playwright.sync_api import sync_playwright
@@ -132,33 +133,63 @@ def _parse_kickoff(time_text: str) -> dt.datetime | None:
     return None
 
 
-def _extract_market_lines(page) -> list[MarketLine]:
-    target_markets = [
-        "Tiros de esquina totales", "Corners Equipo A", "Corners Equipo B",
-        "Goles totales", "Goles Equipo A", "Goles Equipo B",
-        "Tarjetas totales", "Tarjetas Equipo A", "Tarjetas Equipo B",
-        "Handicap",
-    ]
-    lines: list[MarketLine] = []
-    for market_name in target_markets:
-        market_block = page.locator(f"text={market_name}").first
-        if market_block.count() == 0:
+_MARKET_HEADING_RE = re.compile(r"^Total de (Tiros de Esquina|goles|tarjetas)", re.I)
+_ROW_RE = re.compile(r"^(M[aá]s de|Menos de)\s*([\d.,]+)\s+([\d.,]+)$", re.I)
+
+
+def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
+    """Lee los mercados de goles/tarjetas/tiros de esquina actualmente
+    visibles en la pestana activa de la pagina del partido."""
+    headings = page.locator("text=/^Total de (Tiros de Esquina|goles|tarjetas)/i")
+    for i in range(headings.count()):
+        heading = headings.nth(i)
+        try:
+            market_name = heading.inner_text(timeout=1000).strip()
+        except Exception:
             continue
-        see_more = market_block.locator("xpath=ancestor::*[1]//button[contains(., 'Ver mas')]")
-        if see_more.count() > 0:
-            see_more.first.click()
-            page.wait_for_timeout(500)
-        selections = market_block.locator(
-            "xpath=ancestor::*[2]//*[contains(@class,'selection') or contains(@class,'outcome')]"
-        )
-        for j in range(selections.count()):
-            sel = selections.nth(j)
+        container = heading.locator("xpath=following-sibling::*[1]")
+        if container.count() == 0:
+            continue
+        see_more = container.first.locator("text=/Ver m[aá]s|Ocultar la lista/i").first
+        if see_more.count() > 0 and "ver" in see_more.inner_text(timeout=1000).lower():
+            see_more.click()
+            page.wait_for_timeout(400)
+        try:
+            block_text = container.first.inner_text(timeout=1000)
+        except Exception:
+            continue
+        for row in block_text.splitlines():
+            m = _ROW_RE.match(row.strip())
+            if not m:
+                continue
+            direction, line_val, odds_val = m.groups()
             try:
-                label = sel.locator(".selection-name, .outcome-name").first.inner_text(timeout=1000)
-                odds_text = sel.locator(".selection-odds, .outcome-odds").first.inner_text(timeout=1000)
-                odds = float(odds_text.replace(",", "."))
-            except Exception:
+                odds = float(odds_val.replace(",", "."))
+            except ValueError:
                 continue
             if odds >= MIN_ODDS:
-                lines.append(MarketLine(market=market_name, selection=label.strip(), odds=odds))
+                lines.append(
+                    MarketLine(market=market_name, selection=f"{direction} {line_val}", odds=odds)
+                )
+
+
+def _extract_market_lines(page) -> list[MarketLine]:
+    """Extrae cuotas de goles (pestana 'Todos', visible por defecto), y de
+    tiros de esquina y tarjetas (pestana 'Tarjetas y Tiros de Esquina', con
+    sub-pestanas 'Tiros de Esquina' y 'Tarjetas')."""
+    lines: list[MarketLine] = []
+    _collect_visible_markets(page, lines)
+
+    combined_tab = page.locator("text=/Tarjetas y Tiros de Esquina/i").first
+    if combined_tab.count() > 0:
+        combined_tab.click()
+        page.wait_for_timeout(800)
+        _collect_visible_markets(page, lines)
+
+        cards_subtab = page.locator("text=/^Tarjetas$/i").first
+        if cards_subtab.count() > 0:
+            cards_subtab.click()
+            page.wait_for_timeout(800)
+            _collect_visible_markets(page, lines)
+
     return lines
