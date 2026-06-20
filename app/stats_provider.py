@@ -28,6 +28,18 @@ class TeamForm:
     venue: str
     samples: list[TeamMatchStats]
     context: str | None = None
+    # Señales de contexto MEDIBLES que un apostador profesional usa para
+    # ajustar la lambda (no son corazonadas: vienen de tabla/alineacion).
+    #   must_win:          el equipo necesita ganar/anotar (presion en tabla)
+    #                      -> tiende a atacar mas (mas goles y corners).
+    #   role:              "favorito" (presiona, genera corners),
+    #                      "defensivo" (se encierra, menos ataque) o
+    #                      "neutral".
+    #   key_attacker_out:  baja confirmada de goleador/referente ofensivo
+    #                      -> menos goles esperados de ese equipo.
+    must_win: bool = False
+    role: str = "neutral"
+    key_attacker_out: bool = False
 
     @property
     def valid(self) -> bool:

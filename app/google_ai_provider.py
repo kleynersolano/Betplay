@@ -31,10 +31,21 @@ goles recibidos por "{team}" (goals_against), tarjetas (amarillas+rojas) recibid
 "{team}" (cards), y corners a favor de "{team}" (corners, null si no hay dato). Ademas, dame \
 un campo "context" con un resumen breve (maximo 2 frases) del contexto reciente de "{team}" \
 relevante para apostar (lesiones de jugadores clave, racha de resultados, motivacion del \
-partido, suspendidos). Responde UNICAMENTE con un JSON valido, sin texto adicional, con esta \
+partido, suspendidos). Tambien dame un objeto "signals" con SEÑALES MEDIBLES para este \
+proximo partido, basadas en datos reales (tabla de posiciones, alineacion confirmada), NO en \
+opiniones: \
+"must_win" (true si "{team}" NECESITA ganar o anotar por su situacion en la tabla/clasificacion, \
+si no false), \
+"role" ("favorito" si "{team}" es claramente favorito y suele presionar, "defensivo" si suele \
+encerrarse y jugar a la contra, "neutral" si no hay un rol claro), \
+"key_attacker_out" (true SOLO si hay baja confirmada de un goleador o referente ofensivo \
+titular de "{team}", si no false). Si no tienes datos para una señal, usa el valor por defecto \
+(false / "neutral"). Responde UNICAMENTE con un JSON valido, sin texto adicional, con esta \
 forma exacta:
-{{"context": "<resumen breve o cadena vacia>", "matches": [{{"goals_for": <numero>, \
-"goals_against": <numero>, "cards": <numero o null>, "corners": <numero o null>}}, ...]}}
+{{"context": "<resumen breve o cadena vacia>", "signals": {{"must_win": <true|false>, \
+"role": "<favorito|defensivo|neutral>", "key_attacker_out": <true|false>}}, \
+"matches": [{{"goals_for": <numero>, "goals_against": <numero>, "cards": <numero o null>, \
+"corners": <numero o null>}}, ...]}}
 """
 
 PROMPT_TEMPLATE_CLUB = """Eres un asistente de datos deportivos. Busca en internet, consultando \
@@ -178,4 +189,16 @@ def get_team_form(
     if len(samples) < MIN_VALID_MATCHES:
         return None
     context = (data.get("context") or "").strip() or None
-    return TeamForm(team_name=team_name, venue=venue, samples=samples, context=context)
+    signals = data.get("signals") or {}
+    role = str(signals.get("role", "neutral")).strip().lower()
+    if role not in ("favorito", "defensivo", "neutral"):
+        role = "neutral"
+    return TeamForm(
+        team_name=team_name,
+        venue=venue,
+        samples=samples,
+        context=context,
+        must_win=bool(signals.get("must_win", False)),
+        role=role,
+        key_attacker_out=bool(signals.get("key_attacker_out", False)),
+    )

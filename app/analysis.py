@@ -75,19 +75,59 @@ def _combined_lambda(home_avg: float, away_avg: float) -> float:
     return (home_avg + away_avg) / 2
 
 
+# --- Ajuste de lambda por contexto (como un apostador profesional) -----------
+# Reglas FIJAS y acotadas (+/-15% maximo), disparadas SOLO por señales
+# medibles (tabla/alineacion), nunca por corazonadas. Si la señal no esta
+# presente, no hay ajuste.
+
+def _team_goals_factor(form: TeamForm) -> float:
+    """Multiplicador sobre los goles esperados de UN equipo."""
+    factor = 1.0
+    if form.must_win:
+        factor *= 1.10          # necesita anotar -> ataca mas
+    if form.role == "defensivo":
+        factor *= 0.92          # se encierra -> genera menos ofensiva
+    if form.key_attacker_out:
+        factor *= 0.85          # baja de su goleador -> menos goles
+    return factor
+
+
+def _match_context_factor(home_form: TeamForm, away_form: TeamForm, stat: str) -> float:
+    """Multiplicador de contexto a nivel PARTIDO para corners/tarjetas."""
+    factor = 1.0
+    pressing = (
+        home_form.must_win or away_form.must_win
+        or home_form.role == "favorito" or away_form.role == "favorito"
+    )
+    both_defensive = home_form.role == "defensivo" and away_form.role == "defensivo"
+    if stat == "corners":
+        if pressing:
+            factor *= 1.10      # equipo presionando -> mas corners
+        if both_defensive:
+            factor *= 0.90      # dos equipos cerrados -> menos corners
+    elif stat == "cards":
+        # Partido de mucha tension (alguien obligado a ganar) -> mas faltas
+        # y tarjetas.
+        if home_form.must_win and away_form.must_win:
+            factor *= 1.10
+    # Se acota el ajuste total a +/-15% para no distorsionar el modelo.
+    return max(0.85, min(1.15, factor))
+
+
 def _goals_lambda(home_form: TeamForm, away_form: TeamForm) -> float | None:
     """Lambda de goles totales del partido = goles esperados de cada equipo,
     donde lo esperado de un equipo es el promedio de (sus goles anotados,
     los goles que concede su rival), siguiendo la metodologia pedida:
-    'goles promedio equipo + goles concedidos promedio contrario / 2'."""
+    'goles promedio equipo + goles concedidos promedio contrario / 2'.
+    Cada lado se ajusta por su propio contexto (must_win, rol, bajas)."""
     home_for = home_form.average("goals")
     away_against = away_form.average("goals_against")
     away_for = away_form.average("goals")
     home_against = home_form.average("goals_against")
     if None in (home_for, away_against, away_for, home_against):
         return None
-    home_expected = (home_for + away_against) / 2
-    away_expected = (away_for + home_against) / 2
+    home_expected = (home_for + away_against) / 2 * _team_goals_factor(home_form)
+    away_expected = (away_for + home_against) / 2 * _team_goals_factor(away_form)
     return home_expected + away_expected
 
 
@@ -116,11 +156,17 @@ def evaluate_match(
             continue
 
         if stat == "goals":
+            # _goals_lambda ya aplica el contexto por equipo.
             lam = _goals_lambda(home_form, away_form)
         else:
             home_avg = home_form.average(stat)
             away_avg = away_form.average(stat)
-            lam = _combined_lambda(home_avg, away_avg) if home_avg is not None and away_avg is not None else None
+            if home_avg is None or away_avg is None:
+                lam = None
+            else:
+                lam = _combined_lambda(home_avg, away_avg) * _match_context_factor(
+                    home_form, away_form, stat
+                )
         if lam is None:
             continue
 
