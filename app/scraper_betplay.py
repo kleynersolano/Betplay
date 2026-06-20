@@ -149,6 +149,19 @@ def fetch_upcoming_matches() -> list[Match]:
     seen_pairs: set[tuple[str, str]] = set()
     header_positions: list[tuple[float, str]] = []
 
+    def return_to_listing(page) -> None:
+        # page.go_back() resulto poco confiable en esta SPA: en pruebas
+        # reales, tras extraer las cuotas de un partido el navegador
+        # terminaba saliendo de BetPlay por completo y no volvia a cargar
+        # el listado. En vez de depender del historial, se navega de
+        # nuevo directo a la URL del listado y se reaplican los filtros.
+        page.goto(BETPLAY_URL, wait_until="networkidle", timeout=60_000)
+        page.wait_for_timeout(1500)
+        _click_text(page, "Football|F[uú]tbol", exact=True)
+        page.wait_for_timeout(800)
+        _click_text(page, f"{HOURS_AHEAD} horas", exact=True)
+        page.wait_for_timeout(1000)
+
     def harvest_and_process(page) -> None:
         data = page.evaluate(_BULK_EXTRACT_JS)
         for h in data["headers"]:
@@ -197,8 +210,13 @@ def fetch_upcoming_matches() -> list[Match]:
                 match.lines = _extract_market_lines(page)
                 log.info("  -> %d cuotas extraidas", len(match.lines))
                 matches.append(match)
-                page.go_back(timeout=10_000)
-                page.wait_for_timeout(1200)
+                return_to_listing(page)
+                # El DOM del listado se reseteo por completo (volvimos al
+                # tope); seguir iterando "teams" aqui usaria coordenadas
+                # obsoletas. Se corta este harvest y el loop de scroll de
+                # afuera vuelve a llamar a harvest_and_process con datos
+                # frescos.
+                return
             except Exception:
                 # El navegador puede crashear/cerrarse tras varias
                 # navegaciones seguidas; se descarta este partido y se
