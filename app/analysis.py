@@ -1,6 +1,6 @@
 """
-Calculo de lambda, probabilidad real (Poisson para goles/tarjetas,
-promedio historico para corners) y value%.
+Calculo de lambda, probabilidad real (Poisson para goles/tarjetas/corners)
+y value%.
 """
 from __future__ import annotations
 
@@ -135,13 +135,22 @@ def _match_context_factor(home_form: TeamForm, away_form: TeamForm, stat: str) -
 
 
 def _team_goals_expected(team_form: TeamForm, opponent_form: TeamForm) -> float | None:
-    """Goles esperados de UN equipo = promedio de (sus goles anotados, los
-    goles que concede su rival), ajustado por su propio contexto."""
+    """Goles esperados de UN equipo, ajustado por su propio contexto.
+
+    La unica fuente de datos actual (Modo IA de Google) da el promedio de
+    goles ANOTADOS por el equipo en sus ultimos partidos -- no separa goles
+    a favor de goles en contra del rival, asi que no hay forma de calcular
+    "goles que concede el rival" (ese dato simplemente no existe en
+    overrides). Antes esta funcion promediaba goles_for con
+    opponent.average("goals_against"), que para datos de Modo IA SIEMPRE es
+    None -> devolvia None siempre -> el mercado "goals" quedaba excluido
+    de toda evaluacion en evaluate_match() (nunca se llegaba ni a
+    considerarlo). Se usa directamente el promedio de goles anotados del
+    equipo, igual que ya se hace con corners/tarjetas."""
     team_for = team_form.average("goals")
-    opponent_against = opponent_form.average("goals_against")
-    if team_for is None or opponent_against is None:
+    if team_for is None:
         return None
-    return (team_for + opponent_against) / 2 * _team_goals_factor(team_form)
+    return team_for * _team_goals_factor(team_form)
 
 
 def _goals_lambda(home_form: TeamForm, away_form: TeamForm) -> float | None:
