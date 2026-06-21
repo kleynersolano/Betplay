@@ -38,14 +38,24 @@ log = logging.getLogger("betbot.google_ai")
 # JSON, asi que abajo se extraen los numeros del texto por cercania a las
 # palabras clave; el JSON es solo un "si puedes".
 PROMPT_TEMPLATE = (
-    'Da el promedio por partido de "{team}" en sus ultimos 10 partidos: '
-    "goles anotados, tiros de esquina (corners) y tarjetas (amarillas mas rojas). "
-    "Usa al menos 5 fuentes confiables de estadisticas deportivas (por ejemplo "
-    "Sofascore, FBref, Flashscore, WhoScored, ESPN, Transfermarkt). "
-    "OBLIGATORIO: da SIEMPRE un numero para los tres; NUNCA respondas null "
-    "ni 'no disponible'. Si una fuente no lo tiene, busca en otra o da tu "
-    "mejor estimacion numerica segun el estilo del equipo y partidos similares. "
-    "Responde corto con los tres numeros y en JSON (sin null): "
+    'Necesito 3 promedios por partido de "{team}", calculados sobre sus '
+    "EXACTAMENTE 10 ultimos partidos oficiales ya jugados (de competiciones "
+    "de clubes o de selecciones, los mas recientes con resultado final). "
+    "Estadisticas: goles anotados, tiros de esquina a favor (corners) y "
+    "tarjetas recibidas (amarillas + rojas). "
+    "REGLAS PARA QUE EL RESULTADO SEA SIEMPRE EL MISMO (deterministico): "
+    "1) Usa UNA sola fuente, Sofascore, como fuente primaria de los 10 "
+    "partidos y sus cifras; solo si Sofascore no tiene un dato concreto, "
+    "usa FBref como respaldo, nunca mezcles ni promedies varias fuentes. "
+    "2) Toma los 10 partidos en orden cronologico real (del mas reciente "
+    "hacia atras), sin saltarte ninguno ni elegir cuales. "
+    "3) Calcula cada promedio como la SUMA de esos 10 partidos dividida "
+    "entre 10, y redondea a 2 decimales. "
+    "4) NO estimes, NO inventes, NO uses 'estilo de juego' ni partidos "
+    "similares: solo cifras reales de esos 10 partidos. Si faltara un "
+    "partido, usa el 9.o anterior disponible, pero siempre cifras reales. "
+    "NUNCA respondas null ni 'no disponible'. "
+    "Responde SOLO el JSON, sin texto extra: "
     '{{"goals": <numero>, "corners": <numero>, "cards": <numero>}}'
 )
 
