@@ -42,8 +42,11 @@ PROMPT_TEMPLATE = (
     "goles anotados, tiros de esquina (corners) y tarjetas (amarillas mas rojas). "
     "Usa al menos 5 fuentes confiables de estadisticas deportivas (por ejemplo "
     "Sofascore, FBref, Flashscore, WhoScored, ESPN, Transfermarkt). "
-    "Responde corto con los tres numeros y, si puedes, en JSON "
-    '{{"goals": <n>, "corners": <n o null>, "cards": <n o null>}}'
+    "OBLIGATORIO: da SIEMPRE un numero para los tres; NUNCA respondas null "
+    "ni 'no disponible'. Si una fuente no lo tiene, busca en otra o da tu "
+    "mejor estimacion numerica segun el estilo del equipo y partidos similares. "
+    "Responde corto con los tres numeros y en JSON (sin null): "
+    '{{"goals": <numero>, "corners": <numero>, "cards": <numero>}}'
 )
 
 # Numeros decimales (con , o .): los promedios casi siempre se reportan asi
@@ -365,11 +368,9 @@ def get_team_form(
 
     overrides: dict[str, float] = {}
 
-    # 1) El Modo IA casi siempre responde con un bloque JSON limpio
-    #    ({"goals": 1.5, "corners": null, "cards": null}). Si lo da, se
-    #    RESPETA tal cual: un null significa "no hay dato" y se deja vacio,
-    #    NO se intenta adivinar de la prosa (antes la prosa copiaba el numero
-    #    de goles como corners/tarjetas, dando cifras falsas).
+    # 1) El Modo IA casi siempre responde con un bloque JSON limpio. Se le
+    #    pide explicitamente que NUNCA ponga null, pero por si acaso aun cae
+    #    alguno, abajo (paso 2) se rescata el dato de la prosa.
     data = _extract_json(raw)
     if data is not None:
         for key in ("goals", "corners", "cards"):
@@ -377,14 +378,25 @@ def get_team_form(
             if val is not None:
                 overrides[key] = val
                 log.info("    %s %s=%.2f (Modo IA, JSON)", team_name, key, val)
-    else:
-        # 2) Sin bloque JSON (raro): se extrae cada cifra de la prosa por
-        #    cercania a sus palabras clave, con rangos de sanidad.
-        for key, (lo, hi) in _RANGES.items():
-            val = _num_near(raw, _KEYWORDS[key], lo, hi)
-            if val is not None:
-                overrides[key] = val
-                log.info("    %s %s=%.2f (Modo IA, prosa)", team_name, key, val)
+
+    # 2) Para lo que falte (sin JSON, o un null que se colo), se rescata la
+    #    cifra de la prosa por cercania a sus palabras clave, con rangos de
+    #    sanidad. El objetivo es no dejar NINGUN dato vacio.
+    goals_val = overrides.get("goals")
+    for key, (lo, hi) in _RANGES.items():
+        if key in overrides:
+            continue
+        val = _num_near(raw, _KEYWORDS[key], lo, hi)
+        # Evita el bug viejo: que corners/tarjetas copien el numero de goles
+        # cuando la prosa dice "no disponible" y el unico decimal cerca es el
+        # de goles. Si la cifra rescatada es identica a los goles, se descarta.
+        if val is not None and key != "goals" and goals_val is not None and abs(val - goals_val) < 0.001:
+            val = None
+        if val is not None:
+            overrides[key] = val
+            log.info("    %s %s=%.2f (Modo IA, prosa)", team_name, key, val)
+        else:
+            log.warning("    %s %s: el Modo IA no dio cifra", team_name, key)
 
     # Sin el promedio de goles no hay nada util (es el ancla del modelo).
     if "goals" not in overrides:
