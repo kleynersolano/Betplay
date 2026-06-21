@@ -177,7 +177,8 @@ def _input_center(page, locator) -> tuple[int, int]:
 
 
 _STALL_RELOAD_MS = 60_000  # si en 60s no carga/responde, se asume trabado y se recarga (F5)
-_MAX_RELOADS = 1  # tope de recargas antes de rendirse con este equipo
+_MAX_RELOADS = 3  # tope de recargas (F5) dentro de un mismo intento si se traba
+_MAX_ATTEMPTS = 5  # tope de intentos completos (pagina nueva) si no llega ningun resultado
 
 
 def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 120_000) -> str | None:
@@ -353,9 +354,11 @@ def _to_float(value) -> float | None:
         return None
 
 
-def get_team_form(
-    team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
-) -> TeamForm | None:
+def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
+    """Un intento completo: pregunta al Modo IA y parsea la respuesta. Puede
+    devolver None si no hubo respuesta o no se pudo extraer el promedio de
+    goles; el llamador (get_team_form) decide si reintentar con una pagina
+    nueva."""
     prompt = PROMPT_TEMPLATE.format(team=team_name)
     try:
         raw = _ask_google_ai_mode(prompt)
@@ -414,3 +417,23 @@ def get_team_form(
         return None
 
     return TeamForm(team_name=team_name, venue=venue, samples=[], overrides=overrides)
+
+
+def get_team_form(
+    team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
+) -> TeamForm | None:
+    """Si el Modo IA no devuelve nada util (sin respuesta, o sin un
+    promedio de goles claro), se reintenta con una pagina NUEVA (no la misma
+    trabada) hasta _MAX_ATTEMPTS veces antes de rendirse con este equipo. No
+    se debe dejar al equipo sin datos por un fallo puntual de carga."""
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        form = _get_team_form_once(team_name, venue)
+        if form is not None:
+            return form
+        if attempt < _MAX_ATTEMPTS:
+            log.warning(
+                "    %s: sin resultado util en el intento %d/%d, reintentando con pagina nueva...",
+                team_name, attempt, _MAX_ATTEMPTS,
+            )
+    log.warning("    %s: el Modo IA no dio resultado util tras %d intentos", team_name, _MAX_ATTEMPTS)
+    return None
