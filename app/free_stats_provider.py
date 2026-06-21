@@ -1,24 +1,32 @@
 """
-Estadisticas de equipos desde 3 fuentes GRATIS que NO requieren registro ni
+Estadisticas de equipos desde 5 fuentes GRATIS que NO requieren registro ni
 API key (salvo una key publica de prueba), consultadas por API JSON directa
 (sin navegador, rapido y confiable):
 
-  1) Sofascore  (api.sofascore.com)  -> goles, tiros de esquina, tarjetas
-  2) FotMob     (www.fotmob.com/api) -> goles, tiros de esquina, tarjetas
-  3) TheSportsDB(thesportsdb.com, key publica "3") -> goles
+  1) Sofascore     (api.sofascore.com)            -> goles, corners, tarjetas
+  2) FotMob        (apigw.fotmob.com)              -> goles
+  3) TheSportsDB   (thesportsdb.com, key publica "3") -> goles
+  4) football-data (football-data.org, key gratis) -> goles
+  5) ESPN          (site.api.espn.com)             -> goles
 
-Se consultan las 3 y se PROMEDIA cada estadistica entre las fuentes que
+Se consultan las 5 y se PROMEDIA cada estadistica entre las fuentes que
 respondieron (suma / cantidad), como pidio el usuario, para mas veracidad.
 
-AVISO (honesto): Sofascore y FotMob exponen estas APIs para su propia web,
-NO son APIs publicas oficiales. No requieren registro, pero pueden cambiar
-su estructura o limitar peticiones sin aviso. Por eso todo va envuelto en
-try/except: si una fuente falla, se usa lo que dieron las otras. TheSportsDB
-si es una API publica documentada (la key "3" es de prueba, compartida).
+AVISO (honesto): Sofascore, FotMob y ESPN exponen estas APIs para sus
+propias webs, NO son APIs publicas oficiales. No requieren registro, pero
+pueden cambiar su estructura o limitar peticiones sin aviso. Por eso todo va
+envuelto en try/except: si una fuente falla, se usa lo que dieron las otras.
+TheSportsDB y football-data.org si son APIs publicas documentadas.
+
+Fox Deportes y Claro Deportes NO se conectaron: son plataformas de
+TV/streaming, no exponen ninguna API de estadisticas (ni oculta ni
+oficial); la unica forma de sacarles datos seria scrapear su pagina web con
+navegador, igual que Google, mucho mas lento y fragil que una llamada API.
 """
 from __future__ import annotations
 
 import logging
+import re
 import time
 import unicodedata
 
@@ -349,8 +357,83 @@ def _football_data(team_name: str, venue: str, last_n: int, is_national_team: bo
     return out
 
 
+# --------------------------------------------------------------------------
+# Fuente 5: ESPN (API oculta de site.api.espn.com / site.web.api.espn.com,
+# gratis, sin registro; es la misma que usa espn.com/espndeportes.com)
+# --------------------------------------------------------------------------
+_ESPN_LINK_RE = re.compile(r"/sports/soccer/([\w.\-]+)/teams/(\d+)")
+
+
+def _espn(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
+    search = _get_json(
+        "https://site.web.api.espn.com/apis/common/v3/search",
+        {"query": team_name, "limit": 5, "lang": "en", "region": "us"},
+        "espn/search",
+    )
+    if not search:
+        return None
+
+    # La busqueda de ESPN agrupa resultados por tipo; se busca el grupo de
+    # equipos y, dentro de cada item, el link a site.api.espn.com que ya
+    # trae resuelto el slug de liga + id de equipo (evita tener que mapear
+    # IDs numericos de liga a slugs, que la API no expone directamente).
+    target = _norm(team_name)
+    league_slug = team_id = None
+    for group in search.get("results", []) or []:
+        if group.get("type") != "team":
+            continue
+        for item in group.get("contents", []) or group.get("results", []) or []:
+            href = ""
+            for link in item.get("links", []) or []:
+                href = link.get("href", "")
+                if "/teams/" in href:
+                    break
+            m = _ESPN_LINK_RE.search(href)
+            if not m:
+                continue
+            name = _norm(item.get("displayName", ""))
+            if name == target or target in name or name in target:
+                league_slug, team_id = m.group(1), m.group(2)
+                break
+        if team_id:
+            break
+    if team_id is None:
+        log.warning("    [diag espn] no encontro equipo para '%s'", team_name)
+        return None
+
+    schedule = _get_json(
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_slug}/teams/{team_id}/schedule",
+        label="espn/schedule",
+    )
+    if not schedule or not schedule.get("events"):
+        log.warning("    [diag espn] sin partidos para '%s' (liga=%s)", team_name, league_slug)
+        return None
+
+    gf, ga = [], []
+    for ev in schedule["events"]:
+        if len(gf) >= last_n:
+            break
+        comp = (ev.get("competitions") or [{}])[0]
+        if not comp.get("status", {}).get("type", {}).get("completed"):
+            continue
+        competitors = comp.get("competitors", []) or []
+        if len(competitors) != 2:
+            continue
+        try:
+            mine = next(c for c in competitors if c.get("team", {}).get("id") == team_id)
+            theirs = next(c for c in competitors if c.get("team", {}).get("id") != team_id)
+            gf.append(float(mine.get("score", {}).get("value", mine.get("score"))))
+            ga.append(float(theirs.get("score", {}).get("value", theirs.get("score"))))
+        except (StopIteration, TypeError, ValueError):
+            continue
+
+    if not gf:
+        return None
+    return {"source": "espn", "goals": _avg(gf), "goals_against": _avg(ga)}
+
+
 # Todas las fuentes gratis conectadas. Sirve para TODO el futbol (clubes y
-# selecciones, cualquier liga/pais), no solo el Mundial: las 4 tienen
+# selecciones, cualquier liga/pais), no solo el Mundial: las 5 tienen
 # cobertura mundial. Si una falla, se usan las demas. Para agregar otra
 # fuente basta sumar (nombre, funcion) aqui.
 _SOURCES = [
@@ -358,6 +441,7 @@ _SOURCES = [
     ("fotmob", _fotmob),
     ("thesportsdb", _thesportsdb),
     ("football-data", _football_data),
+    ("espn", _espn),
 ]
 
 
