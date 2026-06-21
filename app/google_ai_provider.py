@@ -341,6 +341,17 @@ def get_team_form(
     if not raw:
         return None
 
+    # DEBUG: se guarda la respuesta cruda del Modo IA en un archivo para poder
+    # ver exactamente como redacta Google los numeros y afinar el parser.
+    try:
+        safe = re.sub(r"[^a-zA-Z0-9]+", "_", team_name).strip("_")
+        dump_path = f"/tmp/modo_ia_{safe}.txt"
+        with open(dump_path, "w", encoding="utf-8") as fh:
+            fh.write(raw)
+        log.info("    [debug] respuesta cruda guardada en %s", dump_path)
+    except Exception:
+        pass
+
     overrides: dict[str, float] = {}
 
     # 1) Si el Modo IA hizo caso y devolvio JSON, se usa directo.
