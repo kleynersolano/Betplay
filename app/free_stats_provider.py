@@ -26,7 +26,6 @@ navegador, igual que Google, mucho mas lento y fragil que una llamada API.
 from __future__ import annotations
 
 import logging
-import re
 import time
 import unicodedata
 
@@ -242,15 +241,23 @@ def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> 
     )
     if not search:
         return None
-    # El gateway devuelve una lista 'suggestions' con entradas que tienen
-    # 'type' y 'payload' (id, name). Tambien se contemplan los formatos
-    # antiguos (teams.dataset / squad) por compatibilidad.
+    # Formato real (verificado con curl): {"teamSuggest": [{"text": "...",
+    # "options": [{"text": "Nombre del equipo", "payload": {"id": ...}}]}],
+    # "leagueSuggest": [...], ...}. Se contemplan ademas los formatos
+    # antiguos (suggestions / teams.dataset / squad) por compatibilidad si
+    # FotMob vuelve a cambiar la forma de la respuesta.
     teams_block: list[dict] = []
     if isinstance(search, dict):
-        for sug in search.get("suggestions", []) or []:
-            payload = sug.get("payload") or {}
-            if sug.get("type") in ("teams", "team") and payload.get("id"):
-                teams_block.append({"id": payload.get("id"), "name": payload.get("name", "")})
+        for group in search.get("teamSuggest", []) or []:
+            for opt in group.get("options", []) or []:
+                payload = opt.get("payload") or {}
+                if payload.get("id"):
+                    teams_block.append({"id": payload["id"], "name": opt.get("text", "")})
+        if not teams_block:
+            for sug in search.get("suggestions", []) or []:
+                payload = sug.get("payload") or {}
+                if sug.get("type") in ("teams", "team") and payload.get("id"):
+                    teams_block.append({"id": payload.get("id"), "name": payload.get("name", "")})
         if not teams_block:
             teams_block = (search.get("teams") or {}).get("dataset") or search.get("squad") or []
     team_id = None
@@ -361,9 +368,6 @@ def _football_data(team_name: str, venue: str, last_n: int, is_national_team: bo
 # Fuente 5: ESPN (API oculta de site.api.espn.com / site.web.api.espn.com,
 # gratis, sin registro; es la misma que usa espn.com/espndeportes.com)
 # --------------------------------------------------------------------------
-_ESPN_LINK_RE = re.compile(r"/sports/soccer/([\w.\-]+)/teams/(\d+)")
-
-
 def _espn(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     search = _get_json(
         "https://site.web.api.espn.com/apis/common/v3/search",
@@ -373,32 +377,24 @@ def _espn(team_name: str, venue: str, last_n: int, is_national_team: bool) -> di
     if not search:
         return None
 
-    # La busqueda de ESPN agrupa resultados por tipo; se busca el grupo de
-    # equipos y, dentro de cada item, el link a site.api.espn.com que ya
-    # trae resuelto el slug de liga + id de equipo (evita tener que mapear
-    # IDs numericos de liga a slugs, que la API no expone directamente).
+    # Formato real (verificado con curl): {"items": [{"id": "659",
+    # "displayName": "Tunisia", "type": "team", "defaultLeagueSlug":
+    # "fifa.world", ...}, ...]} -- no hace falta parsear links.
     target = _norm(team_name)
     league_slug = team_id = None
-    for group in search.get("results", []) or []:
-        if group.get("type") != "team":
+    for item in search.get("items", []) or []:
+        if item.get("type") != "team" or not item.get("id"):
             continue
-        for item in group.get("contents", []) or group.get("results", []) or []:
-            href = ""
-            for link in item.get("links", []) or []:
-                href = link.get("href", "")
-                if "/teams/" in href:
-                    break
-            m = _ESPN_LINK_RE.search(href)
-            if not m:
-                continue
-            name = _norm(item.get("displayName", ""))
-            if name == target or target in name or name in target:
-                league_slug, team_id = m.group(1), m.group(2)
-                break
-        if team_id:
+        name = _norm(item.get("displayName", ""))
+        if name == target or target in name or name in target:
+            team_id = item["id"]
+            league_slug = item.get("defaultLeagueSlug")
             break
     if team_id is None:
         log.warning("    [diag espn] no encontro equipo para '%s'", team_name)
+        return None
+    if not league_slug:
+        log.warning("    [diag espn] equipo '%s' sin liga por defecto", team_name)
         return None
 
     schedule = _get_json(

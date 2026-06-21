@@ -6,6 +6,13 @@ El plan gratuito de football-data.org no incluye estadisticas de partido
 (corners/tarjetas), solo resultados. Por eso aqui solo se completan goles;
 corners y tarjetas quedan en None y esos mercados se descartan si no hay
 suficientes datos validos de otra fuente.
+
+IMPORTANTE (verificado con curl real): el endpoint de busqueda libre
+/v4/teams?name=... da 403 en el plan gratuito ("restricted ... check your
+subscription"), aunque la key sea valida -- esa busqueda quedo solo para
+planes pagos. El plan gratis si permite listar equipos por competicion
+(/v4/competitions/{code}/teams), asi que se busca el nombre dentro de las
+competiciones que el plan gratis cubre.
 """
 from __future__ import annotations
 
@@ -17,15 +24,31 @@ from app.stats_provider import TeamForm, TeamMatchStats
 BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {"X-Auth-Token": FOOTBALL_DATA_API_KEY}
 
+# Competiciones que cubre el plan gratuito de football-data.org (las mismas
+# que el bot ya prioriza via VALID_COMPETITIONS_KEYWORDS).
+_FREE_COMPETITIONS = [
+    "WC", "CL", "BL1", "BSA", "ELC", "EC", "PL", "PD", "FL1", "SA", "PPL", "DED",
+]
+
 
 def _find_team_id(team_name: str) -> int | None:
     if not FOOTBALL_DATA_API_KEY:
         return None
-    resp = requests.get(f"{BASE_URL}/teams", headers=HEADERS, params={"name": team_name}, timeout=15)
-    if resp.status_code != 200:
-        return None
-    results = resp.json().get("teams", [])
-    return results[0]["id"] if results else None
+    target = team_name.strip().lower()
+    for code in _FREE_COMPETITIONS:
+        resp = requests.get(f"{BASE_URL}/competitions/{code}/teams", headers=HEADERS, timeout=15)
+        if resp.status_code == 429:
+            # Free tier es 10 req/min; si se gasta la cuota recorriendo
+            # competiciones se detiene en vez de seguir fallando en cadena.
+            break
+        if resp.status_code != 200:
+            continue
+        for team in resp.json().get("teams", []):
+            name = (team.get("name") or "").lower()
+            short = (team.get("shortName") or "").lower()
+            if target == name or target == short or target in name or name in target:
+                return team["id"]
+    return None
 
 
 def get_team_form(
