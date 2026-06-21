@@ -92,7 +92,18 @@ def _parse_line_value(selection: str) -> tuple[str, float] | None:
 
 
 def _combined_lambda(home_avg: float, away_avg: float) -> float:
-    return (home_avg + away_avg) / 2
+    """Lambda del mercado TOTAL (ambos equipos) para corners/tarjetas.
+
+    home_avg/away_avg son el promedio de corners (o tarjetas) que cada
+    equipo genera POR SI MISMO en sus ultimos partidos. El total del
+    partido es la SUMA de lo que aporta cada equipo, no el promedio entre
+    ellos: antes esta funcion dividia por 2, lo que subestimaba el total a
+    la MITAD (ej. Belgica 5.8 + Iran 4.6 -> debería dar ~10.4 corners
+    totales, pero daba 5.2). Eso generaba "value irreal" de 100%-250% en
+    casi todas las lineas de "Total de Tiros de Esquina"/"Total de
+    tarjetas" del partido completo -- no porque el dato fuera poco
+    fiable, sino porque la formula calculaba mal el total."""
+    return home_avg + away_avg
 
 
 # --- Ajuste de lambda por contexto (como un apostador profesional) -----------
