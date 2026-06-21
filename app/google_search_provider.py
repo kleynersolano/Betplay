@@ -27,8 +27,6 @@ from __future__ import annotations
 import logging
 import re
 import statistics
-import urllib.parse
-
 from playwright.sync_api import sync_playwright
 
 from app.config import GOOGLE_AI_HEADLESS, GOOGLE_AI_PROFILE_DIR
@@ -36,10 +34,12 @@ from app.stats_provider import TeamForm
 
 log = logging.getLogger("betbot.google_search")
 
-# hl=es / gl=co fuerzan resultados en español y de Colombia, para que los
-# encabezados ("promedio", "goles", etc.) y las cifras vengan en el formato
-# esperado.
-_SEARCH_URL = "https://www.google.com/search?hl=es&gl=co&q={q}"
+# Pagina de inicio de Google (no la URL de busqueda directa). Se abre esta y
+# se ESCRIBE la pregunta en el buscador como un humano (en vez de ir directo
+# a /search?q=...), porque Google detecta la navegacion directa a la URL de
+# resultados como automatizacion y responde con CAPTCHA casi siempre. hl=es /
+# gl=co fuerzan español y region Colombia.
+_HOME_URL = "https://www.google.com/?hl=es&gl=co"
 
 # Minimo de fuentes (dominios distintos citados) requeridas para considerar
 # el dato confiable, segun lo pedido por el usuario.
@@ -138,11 +138,52 @@ def _extract_avg(text: str, lo: float, hi: float) -> float | None:
     return round(statistics.mean(cands), 2)
 
 
+def _type_query(page, query: str) -> bool:
+    """Escribe la pregunta en el cuadro de busqueda de Google y presiona
+    Enter, imitando a un humano (tecla por tecla con pequeñas pausas), en vez
+    de navegar directo a la URL de resultados. Devuelve True si logro lanzar
+    la busqueda."""
+    # El cuadro de Google es un <textarea name="q"> (antes era <input>); se
+    # contemplan ambos por si cambia.
+    box = None
+    for sel in ("textarea[name='q']", "input[name='q']"):
+        loc = page.locator(sel)
+        try:
+            if loc.count() > 0:
+                box = loc.first
+                break
+        except Exception:
+            continue
+    if box is None:
+        return False
+    try:
+        box.click(timeout=5000)
+        page.wait_for_timeout(300)
+        # type() emite cada tecla con delay, mas parecido a un humano que
+        # fill() (que pega el texto de golpe).
+        box.type(query, delay=60)
+        page.wait_for_timeout(400)
+        box.press("Enter")
+        return True
+    except Exception:
+        return False
+
+
 def _search(page, query: str) -> tuple[str, list[str], bool]:
-    """Hace una busqueda en Google, scrollea para cargar mas snippets y
+    """Abre la home de Google, escribe la pregunta en el buscador como un
+    humano, espera los resultados, scrollea para cargar mas snippets y
     devuelve (texto_visible, fuentes, bloqueado)."""
-    url = _SEARCH_URL.format(q=urllib.parse.quote(query))
-    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+    page.goto(_HOME_URL, wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_timeout(1500)
+    _maybe_consent(page)
+    if not _type_query(page, query):
+        log.warning("    No se encontro el cuadro de busqueda de Google")
+        return "", [], False
+    # Espera a que cargue la pagina de resultados tras el Enter.
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=30_000)
+    except Exception:
+        pass
     page.wait_for_timeout(1500)
     _maybe_consent(page)
     # Scroll para que carguen el recuadro de respuesta y mas resultados de
