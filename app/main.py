@@ -18,27 +18,13 @@ log = logging.getLogger("betbot")
 def _get_team_form_with_fallback(
     team_name: str, venue: str, is_national_team: bool = False
 ) -> TeamForm | None:
-    """Estrategia de datos: rapida, real y confiable primero, con respaldo.
-
-    1) free_stats_provider: 4 fuentes (Sofascore, FotMob, TheSportsDB y
-       football-data.org) por API JSON directa, PROMEDIADAS. Cubren TODO el
-       futbol (clubes y selecciones, cualquier liga), no solo el Mundial.
-       Dan goles, tiros de esquina y tarjetas reales por partido. Es la
-       fuente principal: rapida (sin navegador) y confiable.
-    2) Busqueda en Google (navegador, lento): ultimo recurso para ligas
-       exoticas que ninguna API cubra."""
-    # 1) Fuentes por API, promediadas (principal).
-    try:
-        free_form = free_stats_provider.get_team_form(
-            team_name, venue=venue, is_national_team=is_national_team
-        )
-    except Exception:
-        log.exception("Fallo consultando fuentes de estadisticas para %s", team_name)
-        free_form = None
-    if free_form is not None and free_form.valid:
-        return free_form
-
-    # 2) Google como ultimo recurso (navegador).
+    """Estrategia de datos: Google (busqueda normal, no Modo IA) es la
+    fuente principal, ya que es la unica que da las tres estadisticas
+    (goles, tiros de esquina y tarjetas) con al menos 3 fuentes citadas para
+    verificar el dato. Las APIs gratuitas (free_stats_provider) solo cubren
+    goles, asi que quedan como respaldo cuando Google falla (CAPTCHA,
+    bloqueo, menos de 3 fuentes encontradas, etc.)."""
+    # 1) Google: fuente principal (goles + corners + tarjetas, >=3 fuentes).
     try:
         g_form = google_search_provider.get_team_form(
             team_name, venue=venue, is_national_team=is_national_team
@@ -47,8 +33,19 @@ def _get_team_form_with_fallback(
         log.exception("Fallo consultando Google para %s", team_name)
         g_form = None
     if g_form is not None:
-        log.info("    %s: Google (ultimo recurso)", team_name)
         return g_form
+
+    # 2) Respaldo: APIs gratuitas (solo goles) si Google no dio datos.
+    try:
+        free_form = free_stats_provider.get_team_form(
+            team_name, venue=venue, is_national_team=is_national_team
+        )
+    except Exception:
+        log.exception("Fallo consultando fuentes de estadisticas para %s", team_name)
+        free_form = None
+    if free_form is not None and free_form.valid:
+        log.info("    %s: APIs gratuitas (respaldo, Google no dio datos)", team_name)
+        return free_form
     return None
 
 

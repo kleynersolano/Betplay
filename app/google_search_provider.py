@@ -1,16 +1,22 @@
 """
 Estadisticas de equipos via la busqueda NORMAL de Google (no el Modo IA):
-se hace una busqueda por estadistica, se lee el recuadro de respuesta y los
-snippets que aparecen arriba (de varias fuentes: Sofascore, FBref, etc.), se
-scrollea para cargar mas resultados, y se extrae el promedio por partido
-buscando numeros decimales plausibles en el texto visible. Se citan las
-fuentes (dominios) que aparecieron, para tener trazabilidad.
+UNA sola busqueda por equipo, pidiendo a la vez el promedio de goles, tiros
+de esquina y tarjetas (amarillas+rojas) en sus ultimos 10 partidos. Se lee
+el texto visible de la pagina de resultados (recuadros + snippets de varias
+fuentes: Sofascore, FBref, etc.), se scrollea para cargar mas resultados, y
+se promedia (suma/cantidad) cada estadistica entre las cifras plausibles
+encontradas. Se exige al menos 3 fuentes (dominios) distintas citadas para
+considerar el dato confiable; si no se llega a esa cantidad, el partido no
+se evalua con esa fuente.
+
+No importa el contexto del partido (local/visitante, club/seleccion): la
+pregunta siempre es por los "ultimos 10 partidos" del equipo en general.
 
 AVISO: automatizar la busqueda de Google va contra sus Terminos de Servicio
 y, sobre todo, Google BLOQUEA agresivamente el scraping: tras varias
 busquedas seguidas suele mostrar un CAPTCHA ("trafico inusual" / "no soy un
 robot"). Cuando eso pasa, esta fuente deja de dar datos hasta que se resuelva
-manualmente. Por eso conviene combinar con football-data.org (goles reales).
+manualmente.
 
 Requiere el mismo perfil persistente que el Modo IA
 (GOOGLE_AI_PROFILE_DIR); correr una vez con GOOGLE_AI_HEADLESS=false para
@@ -35,24 +41,28 @@ log = logging.getLogger("betbot.google_search")
 # esperado.
 _SEARCH_URL = "https://www.google.com/search?hl=es&gl=co&q={q}"
 
+# Minimo de fuentes (dominios distintos citados) requeridas para considerar
+# el dato confiable, segun lo pedido por el usuario.
+_MIN_SOURCES = 3
+
 # Rangos plausibles del PROMEDIO POR PARTIDO de UN equipo. Se usan para
 # descartar numeros que claramente no son la estadistica buscada (años como
-# 2026, marcadores como 2-1, porcentajes de posesion 60.5, etc.).
+# 2026, marcadores como 2-1, porcentajes de posesion 60.5, etc.) y para
+# separar, dentro del mismo texto, cuales cifras corresponden a cada
+# estadistica cuando los rangos no se superponen.
 _RANGES = {
     "goals": (0.3, 4.0),
-    "goals_against": (0.3, 4.0),
     "corners": (1.5, 9.0),
     "cards": (0.5, 6.0),
 }
 
-# Una busqueda por estadistica. Se pide explicitamente el "promedio por
-# partido" para empujar a Google a mostrar un recuadro/snippet con la cifra.
-_QUERIES = {
-    "goals": 'promedio de goles anotados por partido de {team} ultimos 10 partidos',
-    "goals_against": 'promedio de goles recibidos por partido de {team} ultimos 10 partidos',
-    "corners": 'promedio de tiros de esquina por partido de {team} ultimos 10 partidos',
-    "cards": 'promedio de tarjetas por partido de {team} ultimos 10 partidos',
-}
+# UNA sola busqueda combinada por equipo: se pide a la vez goles, corners y
+# tarjetas de los ultimos 10 partidos, sin importar si juega de local o
+# visitante ni si es seleccion o club.
+_QUERY = (
+    "promedio por partido de {team} en sus ultimos 10 partidos: "
+    "goles anotados, tiros de esquina (corners) y tarjetas amarillas y rojas"
+)
 
 # Solo numeros DECIMALES (con , o .): los promedios casi siempre se reportan
 # asi ("1.8", "4,5"), mientras que años y marcadores son enteros. Esto filtra
@@ -84,14 +94,15 @@ def _maybe_consent(page) -> None:
             continue
 
 
-def _collect_sources(page, limit: int = 4) -> list[str]:
+def _collect_sources(page, limit: int = 8) -> list[str]:
     """Junta los dominios de las fuentes citadas en los resultados (los
     elementos <cite> que Google pone bajo cada resultado), para tener
-    trazabilidad de donde salio la cifra."""
+    trazabilidad de donde salio la cifra y poder exigir al menos
+    _MIN_SOURCES distintas."""
     domains: list[str] = []
     try:
         cites = page.locator("cite")
-        n = min(cites.count(), 20)
+        n = min(cites.count(), 30)
         for i in range(n):
             try:
                 raw = cites.nth(i).inner_text(timeout=500).strip()
@@ -136,7 +147,7 @@ def _search(page, query: str) -> tuple[str, list[str], bool]:
     _maybe_consent(page)
     # Scroll para que carguen el recuadro de respuesta y mas resultados de
     # distintas fuentes (no solo el primero).
-    for _ in range(3):
+    for _ in range(4):
         page.evaluate("window.scrollBy(0, 800)")
         page.wait_for_timeout(500)
     try:
@@ -151,6 +162,7 @@ def _search(page, query: str) -> tuple[str, list[str], bool]:
 def get_team_form(
     team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
 ) -> TeamForm | None:
+    query = _QUERY.format(team=team_name)
     overrides: dict[str, float] = {}
     sources: list[str] = []
     with sync_playwright() as p:
@@ -159,38 +171,40 @@ def get_team_form(
         )
         try:
             page = context.new_page()
-            for attr, query_tpl in _QUERIES.items():
-                query = query_tpl.format(team=team_name)
-                try:
-                    text, domains, blocked = _search(page, query)
-                except Exception:
-                    log.warning("    Fallo la busqueda de %s para %s", attr, team_name)
-                    continue
-                if blocked:
-                    log.warning(
-                        "    Google bloqueo la busqueda (CAPTCHA/trafico inusual) para %s; "
-                        "se detiene la consulta a Google", team_name
-                    )
-                    break
-                lo, hi = _RANGES[attr]
-                val = _extract_avg(text, lo, hi)
-                if val is not None:
-                    overrides[attr] = val
-                    log.info("    %s %s=%.2f (Google)", team_name, attr, val)
-                else:
-                    log.info("    %s %s: sin cifra clara en Google", team_name, attr)
-                for d in domains:
-                    if d not in sources:
-                        sources.append(d)
+            try:
+                text, sources, blocked = _search(page, query)
+            except Exception:
+                log.warning("    Fallo la busqueda combinada de Google para %s", team_name)
+                text, sources, blocked = "", [], False
+            if blocked:
+                log.warning(
+                    "    Google bloqueo la busqueda (CAPTCHA/trafico inusual) para %s",
+                    team_name,
+                )
         finally:
             context.close()
+
+    if len(sources) < _MIN_SOURCES:
+        log.warning(
+            "    %s: solo %d fuente(s) en Google (se requieren %d), se descarta",
+            team_name, len(sources), _MIN_SOURCES,
+        )
+        return None
+
+    for attr, (lo, hi) in _RANGES.items():
+        val = _extract_avg(text, lo, hi)
+        if val is not None:
+            overrides[attr] = val
+            log.info("    %s %s=%.2f (Google, %d fuentes)", team_name, attr, val, len(sources))
+        else:
+            log.info("    %s %s: sin cifra clara en Google", team_name, attr)
 
     # Sin el promedio de goles no hay nada util (es el ancla del modelo).
     if "goals" not in overrides:
         log.warning("    %s: Google no dio promedio de goles", team_name)
         return None
 
-    context_str = ("Fuentes: " + ", ".join(sources[:4])) if sources else None
+    context_str = "Fuentes: " + ", ".join(sources[:4])
     return TeamForm(
         team_name=team_name,
         venue=venue,
