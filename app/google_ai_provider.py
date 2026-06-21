@@ -40,6 +40,8 @@ log = logging.getLogger("betbot.google_ai")
 PROMPT_TEMPLATE = (
     'Da el promedio por partido de "{team}" en sus ultimos 10 partidos: '
     "goles anotados, tiros de esquina (corners) y tarjetas (amarillas mas rojas). "
+    "Usa al menos 5 fuentes confiables de estadisticas deportivas (por ejemplo "
+    "Sofascore, FBref, Flashscore, WhoScored, ESPN, Transfermarkt). "
     "Responde corto con los tres numeros y, si puedes, en JSON "
     '{{"goals": <n>, "corners": <n o null>, "cards": <n o null>}}'
 )
