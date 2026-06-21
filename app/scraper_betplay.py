@@ -47,10 +47,18 @@ class Match:
 
     @property
     def is_valid_competition(self) -> bool:
+        # Filtro por LISTA NEGRA (no lista blanca): se acepta CUALQUIER
+        # partido de futbol real, de cualquier liga/pais, y solo se descartan
+        # los excluidos (eSports, femenino, juvenil, reservas, virtuales,
+        # etc.). Antes se exigia que la liga estuviera en una lista blanca de
+        # ligas top, lo que dejaba fuera competiciones reales como la USL de
+        # EE.UU. y daba "0 partidos validos" cuando solo habia ligas no-top.
         comp = self.competition.lower()
-        if any(bad in comp for bad in EXCLUDED_KEYWORDS):
+        # Sin liga detectada no se puede garantizar que no sea eSports u otra
+        # cosa excluida, asi que se descarta por seguridad.
+        if not comp.strip():
             return False
-        return any(good in comp for good in VALID_COMPETITIONS_KEYWORDS)
+        return not any(bad in comp for bad in EXCLUDED_KEYWORDS)
 
     @property
     def is_national_team_match(self) -> bool:
