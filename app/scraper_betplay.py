@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from playwright.sync_api import sync_playwright
@@ -28,6 +29,13 @@ from app.config import (
 log = logging.getLogger("betbot.scraper")
 
 BETPLAY_URL = "https://betplay.com.co/apuestas#starting-soon"
+
+
+def _normalize(text: str) -> str:
+    """minusculas y sin tildes, para que 'série a' (con acento, Brasil)
+    coincida igual que 'serie a' en las listas de keywords."""
+    text = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in text if not unicodedata.combining(c))
 
 
 @dataclass
@@ -47,22 +55,24 @@ class Match:
 
     @property
     def is_valid_competition(self) -> bool:
-        # Filtro por LISTA NEGRA (no lista blanca): se acepta CUALQUIER
-        # partido de futbol real, de cualquier liga/pais, y solo se descartan
-        # los excluidos (eSports, femenino, juvenil, reservas, virtuales,
-        # etc.). Antes se exigia que la liga estuviera en una lista blanca de
-        # ligas top, lo que dejaba fuera competiciones reales como la USL de
-        # EE.UU. y daba "0 partidos validos" cuando solo habia ligas no-top.
-        comp = self.competition.lower()
-        # Sin liga detectada no se puede garantizar que no sea eSports u otra
-        # cosa excluida, asi que se descarta por seguridad.
+        # Filtro por LISTA BLANCA: solo se acepta Mundial, eliminatorias,
+        # Libertadores, Champions, Europa League, Sudamericana y la PRIMERA
+        # division de los paises futboleros principales. Se descarta todo lo
+        # demas (ligas menores, segundas divisiones, reservas, amateur,
+        # femenino, eSports), aunque no este explicitamente en la lista
+        # negra: con lista negra sola se filtraban ligas como "Torneo
+        # Federal A" (Argentina, 3ra) o "MLS Next Pro" (EE.UU., reservas)
+        # porque ningun keyword negro las atrapaba.
+        comp = _normalize(self.competition)
         if not comp.strip():
             return False
-        return not any(bad in comp for bad in EXCLUDED_KEYWORDS)
+        if any(bad in comp for bad in EXCLUDED_KEYWORDS):
+            return False
+        return any(good in comp for good in VALID_COMPETITIONS_KEYWORDS)
 
     @property
     def is_national_team_match(self) -> bool:
-        comp = self.competition.lower()
+        comp = _normalize(self.competition)
         return any(kw in comp for kw in NATIONAL_TEAM_COMPETITION_KEYWORDS)
 
 

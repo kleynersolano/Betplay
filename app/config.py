@@ -48,12 +48,21 @@ NATIONAL_TEAM_COMPETITION_KEYWORDS = [
     "mundial", "world cup", "eliminatoria", "copa america", "eurocopa", "euro",
 ]
 
+# Lista BLANCA: solo se aceptan estas competiciones (ver
+# Match.is_valid_competition en scraper_betplay.py). Incluye los torneos
+# de seleccion/copas continentales pedidos y la PRIMERA division (top
+# flight) de los paises futboleros principales. "serie a" cubre tanto
+# Italia como Brasil (cuyo nombre normalizado, sin tildes, tambien
+# contiene "serie a" dentro de "campeonato brasileiro serie a"); se
+# agregan ademas "brasileirao"/"campeonato brasileiro" por si BetPlay usa
+# ese nombre sin "serie a".
 VALID_COMPETITIONS_KEYWORDS = [
     "mundial", "world cup", "eliminatoria", "champions league", "europa league",
-    "conference league", "premier league", "la liga", "laliga", "serie a",
-    "bundesliga", "ligue 1", "eredivisie", "liga portugal", "primeira liga",
-    "liga mx", "libertadores", "sudamericana", "copa america", "eurocopa",
-    "euro", "categoria primera a", "primera division",
+    "premier league", "la liga", "laliga", "serie a", "bundesliga", "ligue 1",
+    "eredivisie", "liga portugal", "primeira liga", "liga mx", "libertadores",
+    "sudamericana", "copa america", "eurocopa", "euro", "categoria primera a",
+    "primera division", "liga profesional", "brasileirao", "campeonato brasileiro",
+    "mls",
 ]
 
 # Orden de prioridad pedido para presentar las mejores apuestas: primero
@@ -69,4 +78,11 @@ EXCLUDED_KEYWORDS = [
     "tercera division", "esports", "esport", "e-soccer", "e-football",
     "efootball", "fc 26", "cyber", "battle", "(e)", "virtual",
     "copa de la liga",
+    # Ligas/divisiones inferiores y de desarrollo que se cuelan en la
+    # lista blanca por compartir palabras con la primera division
+    # ("serie a/b", "primera a/b", etc.) y deben descartarse explicitamente.
+    "serie b", "serie c", "serie d", "primera b", "segunda b", "expansion mx",
+    "liga de desarrollo", "liga regional", "torneo federal", "federal a",
+    "next pro", "catarinense", "paulista", "carioca", "mineiro", "gaucho",
+    "copa do brasil", "challenger", "usl",
 ]
