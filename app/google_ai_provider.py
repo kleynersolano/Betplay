@@ -56,8 +56,16 @@ PROMPT_TEMPLATE = (
     "5) NO estimes ni uses 'estilo de juego' ni partidos similares: solo "
     "cifras reales tomadas de esas fuentes. NUNCA respondas null ni 'no "
     "disponible'. "
-    "Responde SOLO el JSON, sin texto extra: "
-    '{{"goals": <numero>, "corners": <numero>, "cards": <numero>}}'
+    "6) MUESTRA EL TRABAJO: en el JSON incluye, ademas del promedio final, "
+    "el valor que saco cada fuente (Sofascore, FBref, WhoScored). Si una "
+    "fuente no tiene el dato, pon null SOLO en esa fuente (no en el "
+    "promedio final). "
+    "Responde SOLO el JSON, sin texto extra, con esta forma exacta: "
+    '{{"goals": <promedio>, "corners": <promedio>, "cards": <promedio>, '
+    '"fuentes": {{'
+    '"goals": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}, '
+    '"corners": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}, '
+    '"cards": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}}}}}'
 )
 
 # Numeros decimales (con , o .): los promedios casi siempre se reportan asi
@@ -355,6 +363,24 @@ def _to_float(value) -> float | None:
         return None
 
 
+def _log_source_breakdown(team_name: str, fuentes) -> None:
+    """Loguea, por estadistica, lo que reporto cada fuente (Sofascore, FBref,
+    WhoScored). Sirve para diagnosticar la variacion entre consultas: si el
+    promedio final cambia, aqui se ve si fue porque una fuente entrego una
+    cifra distinta o porque el modelo dejo de leer alguna fuente."""
+    if not isinstance(fuentes, dict):
+        return
+    for stat in ("goals", "corners", "cards"):
+        per_source = fuentes.get(stat)
+        if not isinstance(per_source, dict):
+            continue
+        partes = []
+        for src in ("sofascore", "fbref", "whoscored"):
+            v = _to_float(per_source.get(src))
+            partes.append(f"{src}={v:.2f}" if v is not None else f"{src}=-")
+        log.info("    [fuentes] %s %s: %s", team_name, stat, ", ".join(partes))
+
+
 def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
     """Un intento completo: pregunta al Modo IA y parsea la respuesta. Puede
     devolver None si no hubo respuesta o no se pudo extraer el promedio de
@@ -392,6 +418,10 @@ def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
             if val is not None:
                 overrides[key] = val
                 log.info("    %s %s=%.2f (Modo IA, JSON)", team_name, key, val)
+        # DIAGNOSTICO: loguear el valor que reporto cada fuente, para ver de
+        # donde viene la variacion entre consultas (que fuente lee el modelo y
+        # con que cifra). No afecta el calculo: el promedio final ya vino arriba.
+        _log_source_breakdown(team_name, data.get("fuentes"))
 
     # 2) Para lo que falte (sin JSON, o un null que se colo), se rescata la
     #    cifra de la prosa por cercania a sus palabras clave, con rangos de
