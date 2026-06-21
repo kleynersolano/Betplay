@@ -66,6 +66,9 @@ class BetEvaluation:
     stat: str = ""
     home_context: str | None = None
     away_context: str | None = None
+    # True = mercado del TOTAL del partido (ambos equipos); False = mercado
+    # de UN solo equipo. Se prefieren los totales en la seleccion final.
+    is_total: bool = True
 
 
 def _poisson_over_prob(lam: float, line: float) -> float:
@@ -336,6 +339,7 @@ def evaluate_match(
                     stat=stat,
                     home_context=home_form.context,
                     away_context=away_form.context,
+                    is_total=team is None,
                 )
             )
 
@@ -351,18 +355,20 @@ def evaluate_match(
             match.home_team, match.away_team, len(match.lines),
         )
 
-    # Se ordenan TODAS las apuestas validas (cuota>=2.0 y value>=umbral)
-    # por Probabilidad Real descendente y se toman las 3 mejores, segun la
-    # metodologia pedida ("Ordena TODAS las apuestas validas por Prob.Real
-    # mayor a menor, selecciona TOP 3"). Ante empate de probabilidad se
-    # desempata por value% y luego por la prioridad de mercado
-    # (esquinas > goles > tarjetas).
-    evaluations.sort(
-        key=lambda e: (
+    # PRIORIDAD pedida: los tres mercados del TOTAL del partido (total de
+    # tiros de esquina, total de goles, total de tarjetas) van primero. Solo
+    # si NINGUN total tiene value se cae a los mercados por equipo. Dentro de
+    # cada grupo se ordena por Probabilidad Real descendente, desempatando por
+    # value% y luego por prioridad de mercado (esquinas > goles > tarjetas).
+    def _sort_key(e: BetEvaluation):
+        return (
             e.prob_real,
             e.value_percent,
             -(MARKET_PRIORITY.index(e.stat) if e.stat in MARKET_PRIORITY else len(MARKET_PRIORITY)),
-        ),
-        reverse=True,
-    )
-    return evaluations[:3]
+        )
+
+    totals = sorted([e for e in evaluations if e.is_total], key=_sort_key, reverse=True)
+    per_team = sorted([e for e in evaluations if not e.is_total], key=_sort_key, reverse=True)
+
+    chosen = totals if totals else per_team
+    return chosen[:3]
