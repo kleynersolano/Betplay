@@ -4,7 +4,7 @@ import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import google_search_provider
+from app import google_ai_provider
 from app.analysis import evaluate_match
 from app.config import RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
@@ -18,18 +18,18 @@ log = logging.getLogger("betbot")
 def _get_team_form_with_fallback(
     team_name: str, venue: str, is_national_team: bool = False
 ) -> TeamForm | None:
-    """Google (busqueda normal, no Modo IA) es la UNICA fuente de datos: una
-    sola busqueda por equipo que pide a la vez goles, tiros de esquina y
-    tarjetas de sus ultimos 10 partidos, exigiendo al menos 3 fuentes
-    distintas citadas para considerar el dato confiable. Si Google no da
-    datos (CAPTCHA, bloqueo, menos de 3 fuentes), el equipo no se evalua;
-    ya no se usan APIs como respaldo porque solo cubren goles."""
+    """El Modo IA de Google Search (pestana "Modo IA", udm=50) es la UNICA
+    fuente de datos: una sola consulta por equipo que pide a la vez goles,
+    tiros de esquina y tarjetas de sus ultimos partidos, y responde con la
+    cifra citando varias fuentes (Sofascore/FBref/etc.). A diferencia de la
+    busqueda normal, el Modo IA NO dispara CAPTCHA. Si no da datos, el equipo
+    no se evalua."""
     try:
-        return google_search_provider.get_team_form(
+        return google_ai_provider.get_team_form(
             team_name, venue=venue, is_national_team=is_national_team
         )
     except Exception:
-        log.exception("Fallo consultando Google para %s", team_name)
+        log.exception("Fallo consultando el Modo IA de Google para %s", team_name)
         return None
 
 
