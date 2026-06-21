@@ -21,67 +21,31 @@ import re
 
 from playwright.sync_api import sync_playwright
 
-from app.config import GOOGLE_AI_HEADLESS, GOOGLE_AI_PROFILE_DIR, GOOGLE_AI_URL, MIN_VALID_MATCHES
-from app.stats_provider import TeamForm, TeamMatchStats
+from app.config import GOOGLE_AI_HEADLESS, GOOGLE_AI_PROFILE_DIR, GOOGLE_AI_URL
+from app.stats_provider import TeamForm
 
 log = logging.getLogger("betbot.google_ai")
 
-# Se piden PROMEDIOS directos (no la lista partido por partido): el modelo
-# de Poisson solo necesita la media, y pedir el promedio es mas rapido, mas
-# corto y mas robusto que pedir 20 partidos y promediarlos nosotros (eso
-# devolvia respuestas largas, lentas y a veces vacias). Se pide al modelo
-# que de su MEJOR estimacion numerica (probado: exigir verificacion estricta
-# en 3 fuentes hacia que devolviera todo null). Se piden los promedios YA
-# separados por condicion (local/visitante) en la MISMA consulta -- no en
-# consultas separadas por venue, porque eso multiplicaria por 6 las llamadas
-# al Modo IA (que ya es lento y poco confiable) sin ganar fiabilidad.
-_STATS_INSTRUCTIONS = """Da tu MEJOR estimacion numerica de los PROMEDIOS por partido \
-de "{team}" SEPARADOS por condicion de local y visitante (no devuelvas null salvo que \
-el dato realmente no exista): goles anotados de local (goals_for_home) y de visitante \
-(goals_for_away), goles recibidos de local (goals_against_home) y de visitante \
-(goals_against_away), tiros de esquina a favor de local (corners_home) y de visitante \
-(corners_away), y tarjetas amarillas+rojas recibidas de local (cards_home) y de \
-visitante (cards_away). Ademas, un campo "context" con un resumen breve (maximo 2 \
-frases) del contexto reciente relevante para apostar (lesiones de titulares, racha, \
-motivacion del partido). Y un objeto "signals" con SEÑALES MEDIBLES basadas en datos \
-reales (tabla, alineacion confirmada), NO opiniones: \
-"must_win" (true si "{team}" NECESITA ganar/anotar por su situacion en la tabla, si no false), \
-"role" ("favorito" si suele presionar, "defensivo" si suele encerrarse, "neutral" si no hay \
-rol claro), \
-"key_attacker_out" (true SOLO si hay baja confirmada de un goleador titular, si no false). \
-Responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
-{{"goals_for_home": <numero>, "goals_for_away": <numero>, \
-"goals_against_home": <numero>, "goals_against_away": <numero>, \
-"corners_home": <numero o null>, "corners_away": <numero o null>, \
-"cards_home": <numero o null>, "cards_away": <numero o null>, \
-"context": "<resumen breve o cadena vacia>", \
-"signals": {{"must_win": <true|false>, "role": "<favorito|defensivo|neutral>", \
-"key_attacker_out": <true|false>}}}}
+# Una sola pregunta corta y directa por equipo: promedio de goles, corners
+# y tarjetas de sus ultimos 10 partidos. Antes se pedia esto separado por
+# local/visitante con instrucciones largas (mas lento y menos confiable de
+# escribir/leer); como el contexto del partido no importa, se simplifico a
+# una pregunta breve sobre los ultimos 10 partidos en general.
+PROMPT_TEMPLATE = """Da el promedio por partido de "{team}" en sus ultimos 10 partidos: \
+goles anotados (goals), tiros de esquina (corners) y tarjetas amarillas+rojas (cards). \
+Responde UNICAMENTE con un JSON valido: {{"goals": <numero>, "corners": <numero o null>, \
+"cards": <numero o null>}}
 """
-
-PROMPT_TEMPLATE_CLUB = """Eres un analista de datos deportivos. Usando como fuente \
-principal Sofascore o FBref (sin que yo necesite entrar a esas paginas), calcula las \
-estadisticas promedio de los ultimos {n} partidos oficiales del equipo "{team}".
-""" + _STATS_INSTRUCTIONS
-
-# Las selecciones nacionales no tienen "liga local" (juegan eliminatorias,
-# mundiales, amistosos, copas continentales): se piden sus ultimos partidos
-# oficiales con la seleccion, sin filtrar por venue/liga.
-PROMPT_TEMPLATE_NATIONAL = """Eres un analista de datos deportivos. Usando como fuente \
-principal Sofascore o FBref (sin que yo necesite entrar a esas paginas), calcula las \
-estadisticas promedio de los ultimos {n} partidos oficiales (eliminatorias, mundial, \
-copas continentales, amistosos) de la seleccion nacional de "{team}".
-""" + _STATS_INSTRUCTIONS
 
 
 def _extract_json(text: str) -> dict | None:
-    """Busca el objeto JSON que contiene "signals" dentro de un texto que
+    """Busca el objeto JSON que contiene "goals" dentro de un texto que
     puede tener mucho mas contenido alrededor (toda la pagina visible).
     No usa una regex greedy de '{...}' porque con el texto de la pagina
     completa eso capturaria desde el primer '{' hasta el ULTIMO '}' de
     toda la pagina. En vez de eso, ubica el '{' que abre el objeto que
-    contiene "signals" y cuenta llaves balanceadas hasta cerrarlo."""
-    key_pos = text.find('"signals"')
+    contiene "goals" y cuenta llaves balanceadas hasta cerrarlo."""
+    key_pos = text.find('"goals"')
     if key_pos == -1:
         return None
     start = text.rfind("{", 0, key_pos)
@@ -233,7 +197,7 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
 
     # No se usa un selector fijo del contenedor de respuesta (la UI de
     # Google cambia seguido y nunca se confirmo contra el DOM real).
-    # En vez de eso se espera a que el JSON pedido ("signals" aparezca
+    # En vez de eso se espera a que el JSON pedido ("goals" aparezca
     # en cualquier parte del texto visible de la pagina, sondeando. Si
     # pasan 60s sin respuesta se asume que la pagina/el equipo esta
     # trabado y se recarga (F5) en vez de seguir esperando indefinidamente.
@@ -247,7 +211,7 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
             text = body.inner_text(timeout=2000)
         except Exception:
             continue
-        if '"signals"' in text:
+        if '"goals"' in text:
             return text
         if elapsed >= _STALL_RELOAD_MS:
             log.warning("Modo IA trabado %ds sin responder, se recargara (F5)", elapsed // 1000)
@@ -268,12 +232,9 @@ def _to_float(value) -> float | None:
 
 
 def get_team_form(
-    team_name: str, venue: str, last_n: int = 20, is_national_team: bool = False
+    team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
 ) -> TeamForm | None:
-    if is_national_team:
-        prompt = PROMPT_TEMPLATE_NATIONAL.format(n=last_n, team=team_name)
-    else:
-        prompt = PROMPT_TEMPLATE_CLUB.format(n=last_n, team=team_name, venue=venue)
+    prompt = PROMPT_TEMPLATE.format(team=team_name)
     try:
         raw = _ask_google_ai_mode(prompt)
     except Exception:
@@ -285,38 +246,14 @@ def get_team_form(
     if not data:
         return None
 
-    # Ahora la respuesta trae PROMEDIOS directos ya separados por
-    # local/visitante (no lista de partidos). Se toma el sufijo que
-    # corresponde al venue de ESTE partido y se carga como override para
-    # que TeamForm.average() lo devuelva tal cual.
-    suffix = "home" if venue == "home" else "away"
     overrides: dict[str, float] = {}
-    for key, attr in (
-        (f"goals_for_{suffix}", "goals"),
-        (f"goals_against_{suffix}", "goals_against"),
-        (f"corners_{suffix}", "corners"),
-        (f"cards_{suffix}", "cards"),
-    ):
+    for key in ("goals", "corners", "cards"):
         val = _to_float(data.get(key))
         if val is not None:
-            overrides[attr] = val
+            overrides[key] = val
 
     # Sin el promedio de goles no hay nada util (es el ancla del modelo).
     if "goals" not in overrides:
         return None
 
-    context = (data.get("context") or "").strip() or None
-    signals = data.get("signals") or {}
-    role = str(signals.get("role", "neutral")).strip().lower()
-    if role not in ("favorito", "defensivo", "neutral"):
-        role = "neutral"
-    return TeamForm(
-        team_name=team_name,
-        venue=venue,
-        samples=[],
-        context=context,
-        must_win=bool(signals.get("must_win", False)),
-        role=role,
-        key_attacker_out=bool(signals.get("key_attacker_out", False)),
-        overrides=overrides,
-    )
+    return TeamForm(team_name=team_name, venue=venue, samples=[], overrides=overrides)
