@@ -17,11 +17,19 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import time
 
 from playwright.sync_api import sync_playwright
 
-from app.config import GOOGLE_AI_HEADLESS, GOOGLE_AI_PROFILE_DIR, GOOGLE_AI_URL
+from app.config import (
+    GOOGLE_AI_CACHE_FILE,
+    GOOGLE_AI_CACHE_HOURS,
+    GOOGLE_AI_HEADLESS,
+    GOOGLE_AI_PROFILE_DIR,
+    GOOGLE_AI_URL,
+)
 from app.stats_provider import TeamForm
 
 log = logging.getLogger("betbot.google_ai")
@@ -419,16 +427,59 @@ def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
     return TeamForm(team_name=team_name, venue=venue, samples=[], overrides=overrides)
 
 
+def _load_cache() -> dict:
+    try:
+        with open(GOOGLE_AI_CACHE_FILE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _cache_get(team_name: str) -> dict | None:
+    """Devuelve los overrides cacheados de un equipo si existen y no han
+    expirado (TTL = GOOGLE_AI_CACHE_HOURS). Asi la misma estadistica se
+    reusa entre ciclos en vez de re-preguntar al LLM (que da cifras
+    distintas cada vez)."""
+    entry = _load_cache().get(team_name.lower())
+    if not entry:
+        return None
+    age_h = (time.time() - entry.get("ts", 0)) / 3600
+    if age_h > GOOGLE_AI_CACHE_HOURS:
+        return None
+    overrides = entry.get("overrides")
+    return overrides if isinstance(overrides, dict) and "goals" in overrides else None
+
+
+def _cache_put(team_name: str, overrides: dict) -> None:
+    cache = _load_cache()
+    cache[team_name.lower()] = {"ts": time.time(), "overrides": overrides}
+    try:
+        tmp = f"{GOOGLE_AI_CACHE_FILE}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(cache, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, GOOGLE_AI_CACHE_FILE)
+    except OSError:
+        log.warning("    No se pudo escribir el cache de %s", team_name)
+
+
 def get_team_form(
     team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
 ) -> TeamForm | None:
-    """Si el Modo IA no devuelve nada util (sin respuesta, o sin un
-    promedio de goles claro), se reintenta con una pagina NUEVA (no la misma
-    trabada) hasta _MAX_ATTEMPTS veces antes de rendirse con este equipo. No
-    se debe dejar al equipo sin datos por un fallo puntual de carga."""
+    """Estadisticas de un equipo. PRIMERO mira el cache: si ya se consulto
+    este equipo hace menos de GOOGLE_AI_CACHE_HOURS horas, REUSA esa cifra
+    (clave para que las estadisticas no cambien al azar entre ciclos, ya que
+    el Modo IA da numeros distintos cada vez que se le pregunta). Solo si no
+    hay cache valido se consulta al Modo IA, reintentando con pagina nueva
+    hasta _MAX_ATTEMPTS veces, y el resultado se guarda en cache."""
+    cached = _cache_get(team_name)
+    if cached is not None:
+        log.info("    %s: usando estadisticas en cache %s", team_name, cached)
+        return TeamForm(team_name=team_name, venue=venue, samples=[], overrides=dict(cached))
+
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         form = _get_team_form_once(team_name, venue)
         if form is not None:
+            _cache_put(team_name, form.overrides)
             return form
         if attempt < _MAX_ATTEMPTS:
             log.warning(
