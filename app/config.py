@@ -19,17 +19,6 @@ GOOGLE_AI_URL = os.getenv("GOOGLE_AI_URL", "https://www.google.com/search?udm=50
 GOOGLE_AI_PROFILE_DIR = os.getenv("GOOGLE_AI_PROFILE_DIR", ".google_ai_profile")
 GOOGLE_AI_HEADLESS = os.getenv("GOOGLE_AI_HEADLESS", "true").lower() == "true"
 
-# Cache de estadisticas por equipo. El Modo IA es un LLM y NO es
-# deterministico: la misma pregunta puede dar cifras distintas entre ciclos
-# (se vio Uruguay goles 1.40 vs 0.90 con 10 min de diferencia), lo que hacia
-# cambiar las apuestas al azar. Para fijar el dato, la primera consulta de un
-# equipo se guarda en este archivo y se REUSA durante GOOGLE_AI_CACHE_HOURS
-# horas en vez de volver a preguntar. Asi las estadisticas (y por tanto los
-# pronosticos) son estables. Pasado el TTL se vuelve a consultar (los ultimos
-# 10 partidos cambian con el tiempo, asi que no se cachea para siempre).
-GOOGLE_AI_CACHE_FILE = os.getenv("GOOGLE_AI_CACHE_FILE", ".google_ai_cache.json")
-GOOGLE_AI_CACHE_HOURS = float(os.getenv("GOOGLE_AI_CACHE_HOURS", "12"))
-
 # Navegador visible para el scraper de BetPlay (util para correr localmente
 # y ver el proceso en pantalla). En servidor sin entorno grafico debe ir en true.
 BETPLAY_HEADLESS = os.getenv("BETPLAY_HEADLESS", "false").lower() == "true"

@@ -2,4 +2,3 @@
 .google_ai_profile/
 __pycache__/
 *.pyc
-.google_ai_cache.json
