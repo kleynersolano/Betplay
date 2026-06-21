@@ -92,30 +92,39 @@ def _num_near(text: str, keywords, lo: float, hi: float) -> float | None:
 
 
 def _extract_json(text: str) -> dict | None:
-    """Busca el objeto JSON que contiene "goals" dentro de un texto que
-    puede tener mucho mas contenido alrededor (toda la pagina visible).
-    No usa una regex greedy de '{...}' porque con el texto de la pagina
-    completa eso capturaria desde el primer '{' hasta el ULTIMO '}' de
-    toda la pagina. En vez de eso, ubica el '{' que abre el objeto que
-    contiene "goals" y cuenta llaves balanceadas hasta cerrarlo."""
-    key_pos = text.find('"goals"')
-    if key_pos == -1:
-        return None
-    start = text.rfind("{", 0, key_pos)
-    if start == -1:
-        return None
-    depth = 0
-    for i, ch in enumerate(text[start:], start=start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start : i + 1])
-                except json.JSONDecodeError:
-                    return None
-    return None
+    """Busca el PRIMER objeto JSON VALIDO que contenga "goals" dentro del
+    texto de la pagina. Importante: el texto trae primero el ECO de la
+    pregunta, que incluye una plantilla {"goals": <n>, ...} que NO es JSON
+    valido (los <n> rompen json.loads). Por eso no basta con el primer
+    "goals": se recorren todas sus apariciones y se devuelve la primera que
+    parsee bien (el bloque JSON real que el Modo IA pone como respuesta)."""
+    search_start = 0
+    while True:
+        key_pos = text.find('"goals"', search_start)
+        if key_pos == -1:
+            return None
+        start = text.rfind("{", 0, key_pos)
+        if start == -1:
+            search_start = key_pos + 7
+            continue
+        depth = 0
+        end = None
+        for i in range(start, len(text)):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end is not None:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        # Esa aparicion no dio JSON valido (ej. el eco con <n>); seguir.
+        search_start = key_pos + 7
 
 
 def _find_input(page):
@@ -356,23 +365,26 @@ def get_team_form(
 
     overrides: dict[str, float] = {}
 
-    # 1) Si el Modo IA hizo caso y devolvio JSON, se usa directo.
+    # 1) El Modo IA casi siempre responde con un bloque JSON limpio
+    #    ({"goals": 1.5, "corners": null, "cards": null}). Si lo da, se
+    #    RESPETA tal cual: un null significa "no hay dato" y se deja vacio,
+    #    NO se intenta adivinar de la prosa (antes la prosa copiaba el numero
+    #    de goles como corners/tarjetas, dando cifras falsas).
     data = _extract_json(raw)
-    if data:
+    if data is not None:
         for key in ("goals", "corners", "cards"):
             val = _to_float(data.get(key))
             if val is not None:
                 overrides[key] = val
-
-    # 2) Para lo que falte (lo normal: el Modo IA responde en prosa), se
-    #    extrae cada cifra del texto por cercania a sus palabras clave.
-    for key, (lo, hi) in _RANGES.items():
-        if key in overrides:
-            continue
-        val = _num_near(raw, _KEYWORDS[key], lo, hi)
-        if val is not None:
-            overrides[key] = val
-            log.info("    %s %s=%.2f (Modo IA, prosa)", team_name, key, val)
+                log.info("    %s %s=%.2f (Modo IA, JSON)", team_name, key, val)
+    else:
+        # 2) Sin bloque JSON (raro): se extrae cada cifra de la prosa por
+        #    cercania a sus palabras clave, con rangos de sanidad.
+        for key, (lo, hi) in _RANGES.items():
+            val = _num_near(raw, _KEYWORDS[key], lo, hi)
+            if val is not None:
+                overrides[key] = val
+                log.info("    %s %s=%.2f (Modo IA, prosa)", team_name, key, val)
 
     # Sin el promedio de goles no hay nada util (es el ancla del modelo).
     if "goals" not in overrides:
