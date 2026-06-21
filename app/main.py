@@ -4,7 +4,7 @@ import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import free_stats_provider, google_search_provider
+from app import google_search_provider
 from app.analysis import evaluate_match
 from app.config import RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
@@ -18,35 +18,19 @@ log = logging.getLogger("betbot")
 def _get_team_form_with_fallback(
     team_name: str, venue: str, is_national_team: bool = False
 ) -> TeamForm | None:
-    """Estrategia de datos: Google (busqueda normal, no Modo IA) es la
-    fuente principal, ya que es la unica que da las tres estadisticas
-    (goles, tiros de esquina y tarjetas) con al menos 3 fuentes citadas para
-    verificar el dato. Las APIs gratuitas (free_stats_provider) solo cubren
-    goles, asi que quedan como respaldo cuando Google falla (CAPTCHA,
-    bloqueo, menos de 3 fuentes encontradas, etc.)."""
-    # 1) Google: fuente principal (goles + corners + tarjetas, >=3 fuentes).
+    """Google (busqueda normal, no Modo IA) es la UNICA fuente de datos: una
+    sola busqueda por equipo que pide a la vez goles, tiros de esquina y
+    tarjetas de sus ultimos 10 partidos, exigiendo al menos 3 fuentes
+    distintas citadas para considerar el dato confiable. Si Google no da
+    datos (CAPTCHA, bloqueo, menos de 3 fuentes), el equipo no se evalua;
+    ya no se usan APIs como respaldo porque solo cubren goles."""
     try:
-        g_form = google_search_provider.get_team_form(
+        return google_search_provider.get_team_form(
             team_name, venue=venue, is_national_team=is_national_team
         )
     except Exception:
         log.exception("Fallo consultando Google para %s", team_name)
-        g_form = None
-    if g_form is not None:
-        return g_form
-
-    # 2) Respaldo: APIs gratuitas (solo goles) si Google no dio datos.
-    try:
-        free_form = free_stats_provider.get_team_form(
-            team_name, venue=venue, is_national_team=is_national_team
-        )
-    except Exception:
-        log.exception("Fallo consultando fuentes de estadisticas para %s", team_name)
-        free_form = None
-    if free_form is not None and free_form.valid:
-        log.info("    %s: APIs gratuitas (respaldo, Google no dio datos)", team_name)
-        return free_form
-    return None
+        return None
 
 
 def _cleanup_before_cycle() -> None:
