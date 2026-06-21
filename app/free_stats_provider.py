@@ -1,22 +1,26 @@
 """
-Estadisticas de equipos desde 5 fuentes GRATIS que NO requieren registro ni
+Estadisticas de equipos desde 4 fuentes GRATIS que NO requieren registro ni
 API key (salvo una key publica de prueba), consultadas por API JSON directa
 (sin navegador, rapido y confiable):
 
-  1) Sofascore     (api.sofascore.com)            -> goles, corners, tarjetas
-  2) FotMob        (apigw.fotmob.com)              -> goles
-  3) TheSportsDB   (thesportsdb.com, key publica "3") -> goles
-  4) football-data (football-data.org, key gratis) -> goles
-  5) ESPN          (site.api.espn.com)             -> goles
+  1) FotMob        (apigw.fotmob.com)              -> goles
+  2) TheSportsDB   (thesportsdb.com, key publica "3") -> goles
+  3) football-data (football-data.org, key gratis) -> goles
+  4) ESPN          (site.api.espn.com)             -> goles
 
-Se consultan las 5 y se PROMEDIA cada estadistica entre las fuentes que
+Se consultan las 4 y se PROMEDIA cada estadistica entre las fuentes que
 respondieron (suma / cantidad), como pidio el usuario, para mas veracidad.
 
-AVISO (honesto): Sofascore, FotMob y ESPN exponen estas APIs para sus
-propias webs, NO son APIs publicas oficiales. No requieren registro, pero
-pueden cambiar su estructura o limitar peticiones sin aviso. Por eso todo va
-envuelto en try/except: si una fuente falla, se usa lo que dieron las otras.
-TheSportsDB y football-data.org si son APIs publicas documentadas.
+AVISO (honesto): FotMob y ESPN exponen estas APIs para sus propias webs, NO
+son APIs publicas oficiales. No requieren registro, pero pueden cambiar su
+estructura o limitar peticiones sin aviso. Por eso todo va envuelto en
+try/except: si una fuente falla, se usa lo que dieron las otras. TheSportsDB
+y football-data.org si son APIs publicas documentadas.
+
+Sofascore se probo y se descarto: su Cloudflare bloquea con 403 cualquier
+peticion que no venga de un navegador real (headers Referer/Origin no
+bastan, confirmado con curl real), asi que no es viable por API directa
+sin pasar por un navegador automatizado.
 
 Fox Deportes y Claro Deportes NO se conectaron: son plataformas de
 TV/streaming, no exponen ninguna API de estadisticas (ni oculta ni
@@ -26,7 +30,6 @@ navegador, igual que Google, mucho mas lento y fragil que una llamada API.
 from __future__ import annotations
 
 import logging
-import time
 import unicodedata
 
 import requests
@@ -38,21 +41,13 @@ log = logging.getLogger("betbot.free_stats")
 
 _TIMEOUT = 12
 _HEADERS = {
-    # User-Agent de navegador: Sofascore/FotMob rechazan clientes sin UA.
+    # User-Agent de navegador: FotMob/ESPN rechazan clientes sin UA.
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-}
-
-# Sofascore valida que la peticion parezca venir de su propia web (Cloudflare
-# rechaza con 403 si no). Se mandan Referer/Origin de sofascore.com.
-_SOFASCORE_HEADERS = {
-    **_HEADERS,
-    "Referer": "https://www.sofascore.com/",
-    "Origin": "https://www.sofascore.com",
 }
 
 # Los nombres en BetPlay vienen en español ("Países Bajos", "Túnez") pero
@@ -137,99 +132,7 @@ def _avg(values: list[float]) -> float | None:
 
 
 # --------------------------------------------------------------------------
-# Fuente 1: Sofascore
-# --------------------------------------------------------------------------
-def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
-    # Cloudflare de Sofascore devuelve 403 a clientes "no navegador". Se
-    # prueban dos hosts (el .com y el espejo .app) con headers Referer/Origin
-    # de sofascore.com, que es lo que su Cloudflare valida.
-    data = None
-    host = None
-    for h in ("https://api.sofascore.com", "https://api.sofascore.app"):
-        data = _get_json(
-            f"{h}/api/v1/search/all", {"q": team_name},
-            "sofascore/search", _SOFASCORE_HEADERS,
-        )
-        if data:
-            host = h
-            break
-    if not data:
-        return None
-    team_id = None
-    target = _norm(team_name)
-    for item in data.get("results", []):
-        if item.get("type") != "team":
-            continue
-        entity = item.get("entity", {})
-        name = _norm(entity.get("name", ""))
-        if entity.get("id") and (name == target or target in name or name in target):
-            team_id = entity["id"]
-            break
-    if team_id is None:
-        log.warning("    [diag sofascore] no encontro equipo para '%s'", team_name)
-        return None
-
-    events = _get_json(
-        f"{host}/api/v1/team/{team_id}/events/last/0",
-        label="sofascore/events", headers=_SOFASCORE_HEADERS,
-    )
-    if not events:
-        return None
-
-    gf, ga, corners, cards = [], [], [], []
-    # Mas reciente primero.
-    for ev in reversed(events.get("events", [])):
-        if len(gf) >= last_n:
-            break
-        status = (ev.get("status", {}) or {}).get("type")
-        if status != "finished":
-            continue
-        is_home = (ev.get("homeTeam", {}) or {}).get("id") == team_id
-        hs = (ev.get("homeScore", {}) or {}).get("current")
-        as_ = (ev.get("awayScore", {}) or {}).get("current")
-        if hs is None or as_ is None:
-            continue
-        gf.append(float(hs if is_home else as_))
-        ga.append(float(as_ if is_home else hs))
-
-        stats = _get_json(
-            f"{host}/api/v1/event/{ev['id']}/statistics",
-            label="sofascore/stats", headers=_SOFASCORE_HEADERS,
-        )
-        if stats:
-            for group in stats.get("statistics", []):
-                if group.get("period") != "ALL":
-                    continue
-                for grp in group.get("groups", []):
-                    for it in grp.get("statisticsItems", []):
-                        name = it.get("name", "")
-                        side = it.get("home") if is_home else it.get("away")
-                        try:
-                            num = float(str(side))
-                        except (TypeError, ValueError):
-                            continue
-                        if name == "Corner kicks":
-                            corners.append(num)
-                        elif name in ("Yellow cards", "Red cards"):
-                            cards.append(num)
-        time.sleep(0.3)  # cortesia para no gatillar limites de Sofascore
-
-    out = {"source": "sofascore"}
-    if gf:
-        out["goals"] = _avg(gf)
-        out["goals_against"] = _avg(ga)
-    if corners:
-        out["corners"] = _avg(corners)
-    if cards:
-        # corners y cards se sumaron por evento (yellow+red por separado);
-        # cards puede tener 2 entradas por partido, igual el promedio es por
-        # entrada -> se reescala dividiendo por partidos con datos.
-        out["cards"] = round(sum(cards) / max(len(gf), 1), 2)
-    return out if "goals" in out else None
-
-
-# --------------------------------------------------------------------------
-# Fuente 2: FotMob
+# Fuente 1: FotMob
 # --------------------------------------------------------------------------
 def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     # FotMob movio su busqueda: el viejo /api/searchData da 404. El endpoint
@@ -303,7 +206,7 @@ def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> 
 
 
 # --------------------------------------------------------------------------
-# Fuente 3: TheSportsDB (key publica de prueba "3")
+# Fuente 2: TheSportsDB (key publica de prueba "3")
 # --------------------------------------------------------------------------
 def _thesportsdb(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     search = _get_json(
@@ -346,7 +249,7 @@ def _thesportsdb(team_name: str, venue: str, last_n: int, is_national_team: bool
 
 
 # --------------------------------------------------------------------------
-# Fuente 4: football-data.org (API con key gratuita ya configurada)
+# Fuente 3: football-data.org (API con key gratuita ya configurada)
 # --------------------------------------------------------------------------
 def _football_data(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     form = football_data_provider.get_team_form(
@@ -365,7 +268,7 @@ def _football_data(team_name: str, venue: str, last_n: int, is_national_team: bo
 
 
 # --------------------------------------------------------------------------
-# Fuente 5: ESPN (API oculta de site.api.espn.com / site.web.api.espn.com,
+# Fuente 4: ESPN (API oculta de site.api.espn.com / site.web.api.espn.com,
 # gratis, sin registro; es la misma que usa espn.com/espndeportes.com)
 # --------------------------------------------------------------------------
 def _espn(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
@@ -429,11 +332,10 @@ def _espn(team_name: str, venue: str, last_n: int, is_national_team: bool) -> di
 
 
 # Todas las fuentes gratis conectadas. Sirve para TODO el futbol (clubes y
-# selecciones, cualquier liga/pais), no solo el Mundial: las 5 tienen
+# selecciones, cualquier liga/pais), no solo el Mundial: las 4 tienen
 # cobertura mundial. Si una falla, se usan las demas. Para agregar otra
 # fuente basta sumar (nombre, funcion) aqui.
 _SOURCES = [
-    ("sofascore", _sofascore),
     ("fotmob", _fotmob),
     ("thesportsdb", _thesportsdb),
     ("football-data", _football_data),
