@@ -114,7 +114,16 @@ def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 90_000) -> str | None:
         try:
             page = context.new_page()
             for attempt in range(1 + _MAX_RELOADS):
-                result = _ask_once(page, prompt, max_wait_ms)
+                try:
+                    result = _ask_once(page, prompt, max_wait_ms)
+                except Exception:
+                    # Una excepcion aca (ej. navegacion destruyendo el
+                    # contexto de ejecucion justo tras el Enter) antes
+                    # se propagaba sin atrapar y terminaba cerrando todo
+                    # el navegador via el "finally" de abajo, en vez de
+                    # dejar reintentar con la misma pagina.
+                    log.warning("Modo IA: excepcion en el intento, reintentando...")
+                    result = None
                 if result is not None:
                     return result
                 if attempt < _MAX_RELOADS:
@@ -193,7 +202,16 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
     if not typed:
         log.warning("No se pudo escribir el prompt en el Modo IA")
         return None
-    page.keyboard.press("Enter")
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        # Si Enter dispara una navegacion de pagina completa, Playwright
+        # puede lanzar "Execution context was destroyed" justo en este
+        # instante. Antes esto no se atrapaba y la excepcion se propagaba
+        # hasta el "finally" de _ask_google_ai_mode, que cerraba el
+        # navegador entero en vez de dejar que el sondeo de abajo
+        # esperara la respuesta. Se ignora y se sigue al sondeo.
+        pass
 
     # No se usa un selector fijo del contenedor de respuesta (la UI de
     # Google cambia seguido y nunca se confirmo contra el DOM real).
@@ -205,7 +223,10 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
     poll_ms = 1500
     body = page.locator("body")
     while elapsed < max_wait_ms:
-        page.wait_for_timeout(poll_ms)
+        try:
+            page.wait_for_timeout(poll_ms)
+        except Exception:
+            pass
         elapsed += poll_ms
         try:
             text = body.inner_text(timeout=2000)
