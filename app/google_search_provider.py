@@ -45,6 +45,10 @@ _HOME_URL = "https://www.google.com/?hl=es&gl=co"
 # el dato confiable, segun lo pedido por el usuario.
 _MIN_SOURCES = 3
 
+# Tiempo maximo (segundos) que el bot espera a que el usuario resuelva a
+# mano un CAPTCHA de Google cuando corre con navegador visible.
+_CAPTCHA_WAIT_SECONDS = 180
+
 # Rangos plausibles del PROMEDIO POR PARTIDO de UN equipo. Se usan para
 # descartar numeros que claramente no son la estadistica buscada (años como
 # 2026, marcadores como 2-1, porcentajes de posesion 60.5, etc.) y para
@@ -195,6 +199,36 @@ def _search(page, query: str) -> tuple[str, list[str], bool]:
         text = page.locator("body").inner_text(timeout=3000)
     except Exception:
         text = ""
+
+    # Si Google muestra CAPTCHA y el navegador es visible (no headless), se
+    # pausa para que el usuario lo resuelva A MANO en la ventana. Al
+    # resolverlo, el perfil persistente guarda la sesion y los siguientes
+    # ciclos no deberian volver a pedirlo. En modo headless no hay nadie que
+    # lo resuelva, asi que se reporta bloqueado de una vez.
+    if _BLOCK_RE.search(text) and not GOOGLE_AI_HEADLESS:
+        log.warning(
+            "    Google pide CAPTCHA: resuelvelo A MANO en la ventana del "
+            "navegador. Esperando hasta %d s...", _CAPTCHA_WAIT_SECONDS,
+        )
+        waited = 0
+        while waited < _CAPTCHA_WAIT_SECONDS:
+            page.wait_for_timeout(3000)
+            waited += 3
+            try:
+                text = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                text = ""
+            if not _BLOCK_RE.search(text):
+                log.info("    CAPTCHA resuelto, continuando.")
+                for _ in range(4):
+                    page.evaluate("window.scrollBy(0, 800)")
+                    page.wait_for_timeout(500)
+                try:
+                    text = page.locator("body").inner_text(timeout=3000)
+                except Exception:
+                    text = ""
+                break
+
     if _BLOCK_RE.search(text):
         return text, [], True
     return text, _collect_sources(page), False
