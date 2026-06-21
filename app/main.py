@@ -1,12 +1,14 @@
 import gc
 import logging
+import os
+import re
 import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from app import google_ai_provider
 from app.analysis import evaluate_match
-from app.config import RUN_INTERVAL_MINUTES
+from app.config import GOOGLE_AI_PROFILE_DIR, RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
 from app.stats_provider import TeamForm
 from app.telegram_notifier import notify_match_results, send_message
@@ -41,10 +43,23 @@ def _cleanup_before_cycle() -> None:
     que ni BetPlay terminaba de cargar las cuotas. Antes de cada ciclo se
     matan procesos de Chromium que hayan quedado colgados (no deberia haber
     ninguno vivo entre ciclos, ya que cada scraper cierra su navegador al
-    terminar) y se fuerza una recoleccion de basura de Python."""
+    terminar) y se fuerza una recoleccion de basura de Python.
+
+    Antes el patron solo cubria Chromium *headless* (chrome-linux/headless_shell)
+    o con --remote-debugging; al correr con GOOGLE_AI_HEADLESS=false el
+    navegador es VISIBLE y no coincidia con ese patron, asi que esos
+    procesos quedaban vivos y se acumulaban (equipo lento). Se agrega el
+    directorio del perfil persistente (--user-data-dir=<perfil>), que SI
+    aparece tanto en headless como en visible, para matarlos en ambos casos."""
+    profile = os.path.basename(os.path.normpath(GOOGLE_AI_PROFILE_DIR))
+    patterns = [
+        "chrome-linux/headless_shell",
+        "chromium.*--remote-debugging",
+        f"--user-data-dir=[^ ]*{re.escape(profile)}",
+    ]
     try:
         subprocess.run(
-            ["pkill", "-9", "-f", "chrome-linux/headless_shell|chromium.*--remote-debugging"],
+            ["pkill", "-9", "-f", "|".join(patterns)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except Exception:
