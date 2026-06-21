@@ -91,13 +91,25 @@ def _search_name(team_name: str, is_national_team: bool) -> str:
     return team_name
 
 
-def _get_json(url: str, params: dict | None = None) -> dict | list | None:
+def _get_json(url: str, params: dict | None = None, label: str = "") -> dict | list | None:
+    """GET JSON con diagnostico: si la respuesta no es 200, se registra el
+    codigo y el host para saber EXACTAMENTE por que una fuente no dio datos
+    (403/429 = bloqueo o limite, 401 = falta token, etc.). Sin esto el log
+    solo decia 'SIN DATOS' sin explicar la causa, imposible de corregir."""
     try:
         resp = requests.get(url, params=params, headers=_HEADERS, timeout=_TIMEOUT)
         if resp.status_code != 200:
+            log.warning(
+                "    [diag%s] HTTP %s en %s",
+                f" {label}" if label else "", resp.status_code, url.split("/")[2],
+            )
             return None
         return resp.json()
-    except Exception:
+    except Exception as e:
+        log.warning(
+            "    [diag%s] excepcion %s en %s",
+            f" {label}" if label else "", type(e).__name__, url.split("/")[2],
+        )
         return None
 
 
@@ -109,7 +121,7 @@ def _avg(values: list[float]) -> float | None:
 # Fuente 1: Sofascore
 # --------------------------------------------------------------------------
 def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
-    data = _get_json("https://api.sofascore.com/api/v1/search/all", {"q": team_name})
+    data = _get_json("https://api.sofascore.com/api/v1/search/all", {"q": team_name}, "sofascore/search")
     if not data:
         return None
     team_id = None
@@ -123,9 +135,10 @@ def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) 
             team_id = entity["id"]
             break
     if team_id is None:
+        log.warning("    [diag sofascore] no encontro equipo para '%s'", team_name)
         return None
 
-    events = _get_json(f"https://api.sofascore.com/api/v1/team/{team_id}/events/last/0")
+    events = _get_json(f"https://api.sofascore.com/api/v1/team/{team_id}/events/last/0", label="sofascore/events")
     if not events:
         return None
 
@@ -182,7 +195,7 @@ def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) 
 # Fuente 2: FotMob
 # --------------------------------------------------------------------------
 def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
-    search = _get_json("https://www.fotmob.com/api/searchData", {"term": team_name})
+    search = _get_json("https://www.fotmob.com/api/searchData", {"term": team_name}, "fotmob/search")
     if not search:
         return None
     teams_block = (search.get("teams") or {}).get("dataset") or search.get("squad") or []
@@ -196,9 +209,10 @@ def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> 
     if team_id is None and teams_block:
         team_id = teams_block[0].get("id")
     if team_id is None:
+        log.warning("    [diag fotmob] no encontro equipo para '%s' (bloque vacio)", team_name)
         return None
 
-    team = _get_json("https://www.fotmob.com/api/teams", {"id": team_id})
+    team = _get_json("https://www.fotmob.com/api/teams", {"id": team_id}, "fotmob/teams")
     if not team:
         return None
     fixtures = (((team.get("fixtures") or {}).get("allFixtures") or {}).get("fixtures")) or []
@@ -232,19 +246,25 @@ def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> 
 # --------------------------------------------------------------------------
 def _thesportsdb(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
     search = _get_json(
-        "https://www.thesportsdb.com/api/v1/json/3/searchteams.php", {"t": team_name}
+        "https://www.thesportsdb.com/api/v1/json/3/searchteams.php", {"t": team_name},
+        "thesportsdb/search",
     )
     if not search or not search.get("teams"):
         return None
-    team = search["teams"][0]
+    # Filtra a equipos de futbol (soccer): la busqueda por nombre puede
+    # devolver equipos de otros deportes con el mismo nombre de pais.
+    soccer = [t for t in search["teams"] if (t.get("strSport") or "").lower() == "soccer"]
+    team = (soccer or search["teams"])[0]
     team_id = team.get("idTeam")
     if not team_id:
         return None
 
     events = _get_json(
-        "https://www.thesportsdb.com/api/v1/json/3/eventslast.php", {"id": team_id}
+        "https://www.thesportsdb.com/api/v1/json/3/eventslast.php", {"id": team_id},
+        "thesportsdb/events",
     )
     if not events or not events.get("results"):
+        log.warning("    [diag thesportsdb] sin eventos recientes para '%s'", team_name)
         return None
 
     gf, ga = [], []
