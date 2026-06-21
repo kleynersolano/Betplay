@@ -31,11 +31,62 @@ log = logging.getLogger("betbot.google_ai")
 # local/visitante con instrucciones largas (mas lento y menos confiable de
 # escribir/leer); como el contexto del partido no importa, se simplifico a
 # una pregunta breve sobre los ultimos 10 partidos en general.
-PROMPT_TEMPLATE = """Da el promedio por partido de "{team}" en sus ultimos 10 partidos: \
-goles anotados (goals), tiros de esquina (corners) y tarjetas amarillas+rojas (cards). \
-Responde UNICAMENTE con un JSON valido: {{"goals": <numero>, "corners": <numero o null>, \
-"cards": <numero o null>}}
-"""
+#
+# OJO: NO debe terminar en salto de linea. Se escribe tecla por tecla en el
+# cuadro del Modo IA y un '\n' final dispara un Enter extra que ensucia el
+# envio. El Modo IA suele responder en PROSA (no en JSON) aunque se le pida
+# JSON, asi que abajo se extraen los numeros del texto por cercania a las
+# palabras clave; el JSON es solo un "si puedes".
+PROMPT_TEMPLATE = (
+    'Da el promedio por partido de "{team}" en sus ultimos 10 partidos: '
+    "goles anotados, tiros de esquina (corners) y tarjetas (amarillas mas rojas). "
+    "Responde corto con los tres numeros y, si puedes, en JSON "
+    '{{"goals": <n>, "corners": <n o null>, "cards": <n o null>}}'
+)
+
+# Numeros decimales (con , o .): los promedios casi siempre se reportan asi
+# ("1.8", "2,45"), no como enteros (años, marcadores). Filtra mucho ruido.
+_NUM_RE = re.compile(r"\d+[.,]\d+")
+
+# Rangos plausibles del PROMEDIO POR PARTIDO de UN equipo, para descartar
+# numeros que claramente no son la estadistica (años 2026, posesion 60.5, etc.).
+_RANGES = {
+    "goals": (0.3, 4.0),
+    "corners": (1.5, 11.0),
+    "cards": (0.5, 6.0),
+}
+
+# Palabras clave junto a las que suele aparecer cada cifra en la respuesta.
+# Para goles se prioriza "anotad/a favor" para no agarrar los recibidos.
+_KEYWORDS = {
+    "goals": ("goles anotados", "goles a favor", "anotad", "goles", "gol"),
+    "corners": ("tiros de esquina", "esquina", "corner", "córner"),
+    "cards": ("tarjetas", "tarjeta", "amarillas", "amonest"),
+}
+
+
+def _num_near(text: str, keywords, lo: float, hi: float) -> float | None:
+    """Busca el primer numero decimal plausible (dentro del rango) que este
+    cerca de alguna de las palabras clave dadas, recorriendolas en orden de
+    prioridad. Asi se separa, dentro de la misma respuesta en prosa, cual
+    cifra corresponde a goles, cual a corners y cual a tarjetas."""
+    low = text.lower()
+    for kw in keywords:
+        start = 0
+        while True:
+            idx = low.find(kw, start)
+            if idx == -1:
+                break
+            window = text[max(0, idx - 45): idx + 45]
+            for m in _NUM_RE.finditer(window):
+                try:
+                    v = float(m.group(0).replace(",", "."))
+                except ValueError:
+                    continue
+                if lo <= v <= hi:
+                    return round(v, 2)
+            start = idx + len(kw)
+    return None
 
 
 def _extract_json(text: str) -> dict | None:
@@ -105,7 +156,7 @@ _STALL_RELOAD_MS = 60_000  # si en 60s no carga/responde, se asume trabado y se 
 _MAX_RELOADS = 1  # tope de recargas antes de rendirse con este equipo
 
 
-def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 90_000) -> str | None:
+def _ask_google_ai_mode(prompt: str, max_wait_ms: int = 120_000) -> str | None:
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             GOOGLE_AI_PROFILE_DIR,
@@ -213,15 +264,25 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
         # esperara la respuesta. Se ignora y se sigue al sondeo.
         pass
 
-    # No se usa un selector fijo del contenedor de respuesta (la UI de
-    # Google cambia seguido y nunca se confirmo contra el DOM real).
-    # En vez de eso se espera a que el JSON pedido ("goals" aparezca
-    # en cualquier parte del texto visible de la pagina, sondeando. Si
-    # pasan 60s sin respuesta se asume que la pagina/el equipo esta
-    # trabado y se recarga (F5) en vez de seguir esperando indefinidamente.
-    elapsed = 0
-    poll_ms = 1500
+    # El Modo IA responde en PROSA (no en JSON), generandola de a poco
+    # ("streaming"). No se busca un texto literal: se mide el texto visible
+    # de la pagina y se espera a que (1) CREZCA respecto a lo que habia justo
+    # tras enviar (señal de que la respuesta empezo a aparecer) y luego (2)
+    # se ESTABILICE (deje de crecer dos sondeos seguidos = termino de
+    # escribir). Si en _STALL_RELOAD_MS no crecio nada, se asume trabado y se
+    # recarga (F5) devolviendo None para reintentar.
     body = page.locator("body")
+    try:
+        base_text = body.inner_text(timeout=2000)
+    except Exception:
+        base_text = ""
+    base_len = len(base_text)
+
+    elapsed = 0
+    poll_ms = 2000
+    last_text = ""
+    stable = 0
+    grew_at = 0  # ultimo momento (ms) en que el texto crecio
     while elapsed < max_wait_ms:
         try:
             page.wait_for_timeout(poll_ms)
@@ -232,16 +293,32 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
             text = body.inner_text(timeout=2000)
         except Exception:
             continue
-        if '"goals"' in text:
-            return text
-        if elapsed >= _STALL_RELOAD_MS:
-            log.warning("Modo IA trabado %ds sin responder, se recargara (F5)", elapsed // 1000)
+        # La respuesta ya aporto contenido nuevo respecto al estado inicial.
+        if len(text) > base_len + 40:
+            if text == last_text:
+                stable += 1
+                # Estable ~2 sondeos seguidos => termino de generar.
+                if stable >= 2:
+                    return text
+            else:
+                stable = 0
+                grew_at = elapsed
+            last_text = text
+        # Si nunca crecio (o se trabo) por _STALL_RELOAD_MS, recargar.
+        no_growth_ms = elapsed - grew_at if last_text else elapsed
+        if no_growth_ms >= _STALL_RELOAD_MS:
+            log.warning("Modo IA trabado %ds sin avanzar, se recargara (F5)", no_growth_ms // 1000)
             try:
                 page.reload(wait_until="domcontentloaded", timeout=30_000)
             except Exception:
                 pass
             return None
-    log.warning("Timeout esperando respuesta del Modo IA (no aparecio el JSON)")
+
+    # Se acabo el tiempo: si alcanzo a aparecer algo de respuesta, se
+    # devuelve lo ultimo capturado (puede tener igual los numeros).
+    if last_text:
+        return last_text
+    log.warning("Timeout esperando respuesta del Modo IA (no aparecio nada)")
     return None
 
 
@@ -263,18 +340,30 @@ def get_team_form(
         return None
     if not raw:
         return None
-    data = _extract_json(raw)
-    if not data:
-        return None
 
     overrides: dict[str, float] = {}
-    for key in ("goals", "corners", "cards"):
-        val = _to_float(data.get(key))
+
+    # 1) Si el Modo IA hizo caso y devolvio JSON, se usa directo.
+    data = _extract_json(raw)
+    if data:
+        for key in ("goals", "corners", "cards"):
+            val = _to_float(data.get(key))
+            if val is not None:
+                overrides[key] = val
+
+    # 2) Para lo que falte (lo normal: el Modo IA responde en prosa), se
+    #    extrae cada cifra del texto por cercania a sus palabras clave.
+    for key, (lo, hi) in _RANGES.items():
+        if key in overrides:
+            continue
+        val = _num_near(raw, _KEYWORDS[key], lo, hi)
         if val is not None:
             overrides[key] = val
+            log.info("    %s %s=%.2f (Modo IA, prosa)", team_name, key, val)
 
     # Sin el promedio de goles no hay nada util (es el ancla del modelo).
     if "goals" not in overrides:
+        log.warning("    %s: el Modo IA no dio promedio de goles claro", team_name)
         return None
 
     return TeamForm(team_name=team_name, venue=venue, samples=[], overrides=overrides)
