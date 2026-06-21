@@ -40,6 +40,14 @@ _HEADERS = {
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 }
 
+# Sofascore valida que la peticion parezca venir de su propia web (Cloudflare
+# rechaza con 403 si no). Se mandan Referer/Origin de sofascore.com.
+_SOFASCORE_HEADERS = {
+    **_HEADERS,
+    "Referer": "https://www.sofascore.com/",
+    "Origin": "https://www.sofascore.com",
+}
+
 # Los nombres en BetPlay vienen en español ("Países Bajos", "Túnez") pero
 # Sofascore/FotMob/TheSportsDB buscan en ingles ("Netherlands", "Tunisia").
 # Para selecciones del Mundial esto es clave. Para clubes el nombre suele
@@ -91,13 +99,17 @@ def _search_name(team_name: str, is_national_team: bool) -> str:
     return team_name
 
 
-def _get_json(url: str, params: dict | None = None, label: str = "") -> dict | list | None:
+def _get_json(
+    url: str, params: dict | None = None, label: str = "", headers: dict | None = None
+) -> dict | list | None:
     """GET JSON con diagnostico: si la respuesta no es 200, se registra el
     codigo y el host para saber EXACTAMENTE por que una fuente no dio datos
     (403/429 = bloqueo o limite, 401 = falta token, etc.). Sin esto el log
     solo decia 'SIN DATOS' sin explicar la causa, imposible de corregir."""
     try:
-        resp = requests.get(url, params=params, headers=_HEADERS, timeout=_TIMEOUT)
+        resp = requests.get(
+            url, params=params, headers=headers or _HEADERS, timeout=_TIMEOUT
+        )
         if resp.status_code != 200:
             log.warning(
                 "    [diag%s] HTTP %s en %s",
@@ -121,7 +133,19 @@ def _avg(values: list[float]) -> float | None:
 # Fuente 1: Sofascore
 # --------------------------------------------------------------------------
 def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
-    data = _get_json("https://api.sofascore.com/api/v1/search/all", {"q": team_name}, "sofascore/search")
+    # Cloudflare de Sofascore devuelve 403 a clientes "no navegador". Se
+    # prueban dos hosts (el .com y el espejo .app) con headers Referer/Origin
+    # de sofascore.com, que es lo que su Cloudflare valida.
+    data = None
+    host = None
+    for h in ("https://api.sofascore.com", "https://api.sofascore.app"):
+        data = _get_json(
+            f"{h}/api/v1/search/all", {"q": team_name},
+            "sofascore/search", _SOFASCORE_HEADERS,
+        )
+        if data:
+            host = h
+            break
     if not data:
         return None
     team_id = None
@@ -138,7 +162,10 @@ def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) 
         log.warning("    [diag sofascore] no encontro equipo para '%s'", team_name)
         return None
 
-    events = _get_json(f"https://api.sofascore.com/api/v1/team/{team_id}/events/last/0", label="sofascore/events")
+    events = _get_json(
+        f"{host}/api/v1/team/{team_id}/events/last/0",
+        label="sofascore/events", headers=_SOFASCORE_HEADERS,
+    )
     if not events:
         return None
 
@@ -158,7 +185,10 @@ def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) 
         gf.append(float(hs if is_home else as_))
         ga.append(float(as_ if is_home else hs))
 
-        stats = _get_json(f"https://api.sofascore.com/api/v1/event/{ev['id']}/statistics")
+        stats = _get_json(
+            f"{host}/api/v1/event/{ev['id']}/statistics",
+            label="sofascore/stats", headers=_SOFASCORE_HEADERS,
+        )
         if stats:
             for group in stats.get("statistics", []):
                 if group.get("period") != "ALL":
@@ -195,10 +225,26 @@ def _sofascore(team_name: str, venue: str, last_n: int, is_national_team: bool) 
 # Fuente 2: FotMob
 # --------------------------------------------------------------------------
 def _fotmob(team_name: str, venue: str, last_n: int, is_national_team: bool) -> dict | None:
-    search = _get_json("https://www.fotmob.com/api/searchData", {"term": team_name}, "fotmob/search")
+    # FotMob movio su busqueda: el viejo /api/searchData da 404. El endpoint
+    # vigente es el gateway apigw.fotmob.com/searchapi/suggest, que devuelve
+    # sugerencias agrupadas (squad/teams) en formato distinto.
+    search = _get_json(
+        "https://apigw.fotmob.com/searchapi/suggest",
+        {"term": team_name, "lang": "es,en"}, "fotmob/search",
+    )
     if not search:
         return None
-    teams_block = (search.get("teams") or {}).get("dataset") or search.get("squad") or []
+    # El gateway devuelve una lista 'suggestions' con entradas que tienen
+    # 'type' y 'payload' (id, name). Tambien se contemplan los formatos
+    # antiguos (teams.dataset / squad) por compatibilidad.
+    teams_block: list[dict] = []
+    if isinstance(search, dict):
+        for sug in search.get("suggestions", []) or []:
+            payload = sug.get("payload") or {}
+            if sug.get("type") in ("teams", "team") and payload.get("id"):
+                teams_block.append({"id": payload.get("id"), "name": payload.get("name", "")})
+        if not teams_block:
+            teams_block = (search.get("teams") or {}).get("dataset") or search.get("squad") or []
     team_id = None
     target = _norm(team_name)
     for t in teams_block:
