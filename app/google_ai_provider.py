@@ -254,6 +254,17 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
         lambda: input_box.click(force=True, timeout=3000),
         lambda: page.mouse.click(*_input_center(page, input_box)),
     ]
+    def _paste(text: str) -> None:
+        # Pega TODO el texto de una sola vez (en vez de tecla por tecla):
+        # execCommand('insertText') inserta el contenido como si fuera un
+        # pegado y dispara el evento 'input' que el Modo IA necesita para
+        # habilitar el boton de enviar. Funciona igual en <textarea> y en
+        # div[contenteditable]. Es casi instantaneo, asi que ya no se traba
+        # ni falla escribiendo prompts largos.
+        page.evaluate(
+            "text => { document.execCommand('insertText', false, text); }", text
+        )
+
     typed = ""
     for strategy in strategies:
         try:
@@ -265,9 +276,18 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
             input_box.evaluate("el => { el.value !== undefined ? el.value = '' : el.textContent = ''; }")
         except Exception:
             pass
-        page.keyboard.type(prompt, delay=8)
-        page.wait_for_timeout(300)
+        # 1) Intento principal: pegado instantaneo.
+        try:
+            _paste(prompt)
+        except Exception:
+            pass
+        page.wait_for_timeout(200)
         typed = _typed_text()
+        # 2) Si el pegado no entro texto, ultimo recurso: tipear (lento).
+        if not typed:
+            page.keyboard.type(prompt, delay=8)
+            page.wait_for_timeout(300)
+            typed = _typed_text()
         if typed:
             break
     if not typed:
