@@ -387,11 +387,12 @@ def _log_source_breakdown(team_name: str, fuentes) -> None:
         log.info("    [fuentes] %s %s: %s", team_name, stat, ", ".join(partes))
 
 
-def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
-    """Un intento completo: pregunta al Modo IA y parsea la respuesta. Puede
-    devolver None si no hubo respuesta o no se pudo extraer el promedio de
-    goles; el llamador (get_team_form) decide si reintentar con una pagina
-    nueva."""
+def _get_team_form_once(team_name: str, venue: str) -> dict[str, float] | None:
+    """Un intento completo: pregunta al Modo IA y parsea la respuesta.
+    Devuelve un dict con las claves que se lograron extraer (puede ser
+    parcial, ej. solo "goals"), o None si no hubo respuesta utilizable en
+    absoluto. El llamador (get_team_form) decide si reintentar y como
+    combinar los resultados parciales de varios intentos."""
     prompt = PROMPT_TEMPLATE.format(team=team_name)
     try:
         raw = _ask_google_ai_mode(prompt)
@@ -448,29 +449,41 @@ def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
         else:
             log.warning("    %s %s: el Modo IA no dio cifra", team_name, key)
 
-    # Sin el promedio de goles no hay nada util (es el ancla del modelo).
-    if "goals" not in overrides:
-        log.warning("    %s: el Modo IA no dio promedio de goles claro", team_name)
+    if not overrides:
+        log.warning("    %s: el Modo IA no dio ninguna cifra util", team_name)
         return None
 
-    return TeamForm(team_name=team_name, venue=venue, samples=[], overrides=overrides)
+    return overrides
+
+
+_REQUIRED_KEYS = ("goals", "corners", "cards")
 
 
 def get_team_form(
     team_name: str, venue: str, last_n: int = 10, is_national_team: bool = False
 ) -> TeamForm | None:
-    """Si el Modo IA no devuelve nada util (sin respuesta, o sin un
-    promedio de goles claro), se reintenta con una pagina NUEVA (no la misma
-    trabada) hasta _MAX_ATTEMPTS veces antes de rendirse con este equipo. No
-    se debe dejar al equipo sin datos por un fallo puntual de carga."""
+    """Reintenta con una pagina NUEVA (no la misma trabada) hasta
+    _MAX_ATTEMPTS veces, ACUMULANDO entre intentos lo que se va consiguiendo
+    (antes un intento que daba goles pero no corners/tarjetas se aceptaba
+    igual y se dejaba de reintentar, perdiendo esos mercados de por vida en
+    el ciclo). Ahora solo se deja de reintentar cuando ya se tienen las 3
+    estadisticas, o se acaban los intentos -- en ese caso se devuelve lo
+    parcial que se haya logrado (con tal de tener goles, que es el ancla)."""
+    overrides: dict[str, float] = {}
     for attempt in range(1, _MAX_ATTEMPTS + 1):
-        form = _get_team_form_once(team_name, venue)
-        if form is not None:
-            return form
+        partial = _get_team_form_once(team_name, venue)
+        if partial:
+            for key, val in partial.items():
+                overrides.setdefault(key, val)
+        missing = [k for k in _REQUIRED_KEYS if k not in overrides]
+        if not missing:
+            break
         if attempt < _MAX_ATTEMPTS:
             log.warning(
-                "    %s: sin resultado util en el intento %d/%d, reintentando con pagina nueva...",
-                team_name, attempt, _MAX_ATTEMPTS,
+                "    %s: faltan %s tras el intento %d/%d, reintentando con pagina nueva...",
+                team_name, ",".join(missing), attempt, _MAX_ATTEMPTS,
             )
-    log.warning("    %s: el Modo IA no dio resultado util tras %d intentos", team_name, _MAX_ATTEMPTS)
-    return None
+    if "goals" not in overrides:
+        log.warning("    %s: el Modo IA no dio resultado util tras %d intentos", team_name, _MAX_ATTEMPTS)
+        return None
+    return TeamForm(team_name=team_name, venue=venue, samples=[], overrides=overrides)
