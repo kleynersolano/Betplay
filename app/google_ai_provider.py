@@ -38,45 +38,20 @@ log = logging.getLogger("betbot.google_ai")
 # JSON, asi que abajo se extraen los numeros del texto por cercania a las
 # palabras clave; el JSON es solo un "si puedes".
 PROMPT_TEMPLATE = (
-    'Necesito 3 promedios por partido de "{team}", calculados sobre sus '
-    "EXACTAMENTE 10 ultimos partidos oficiales ya jugados (clubes o "
-    "selecciones, los mas recientes con resultado final). Estadisticas: "
-    "goles anotados, tiros de esquina a favor (corners) y tarjetas "
-    "recibidas (amarillas + rojas). "
-    "METODO OBLIGATORIO Y RIGUROSO (para que el resultado sea SIEMPRE el "
-    "mismo, sin variar entre consultas): "
-    "1) Consulta estas 3 fuentes confiables, en este orden de "
-    "confiabilidad: (a) Sofascore, (b) FBref, (c) WhoScored. "
-    "2) En CADA fuente saca el promedio por partido de los mismos 10 "
-    "ultimos partidos (suma de los 10 dividida entre 10). "
-    "3) El valor final de cada estadistica es el PROMEDIO de los valores de "
-    "las 3 fuentes. Si solo 2 fuentes tienen el dato, promedia entre esas "
-    "2; si solo 1 la tiene, usa esa 1. Nunca inventes una fuente. "
-    "4) Redondea cada resultado final a 2 decimales. "
-    "5) NO estimes ni uses 'estilo de juego' ni partidos similares: solo "
-    "cifras reales tomadas de esas fuentes. NUNCA respondas null ni 'no "
-    "disponible'. "
-    "6) MUESTRA EL TRABAJO: en el JSON incluye, ademas del promedio final, "
-    "el valor que saco cada fuente (Sofascore, FBref, WhoScored). Si una "
-    "fuente no tiene el dato, pon null SOLO en esa fuente (no en el "
-    "promedio final), y NUNCA copies el valor de otra fuente para "
-    "rellenar: si no la consultaste o no tiene el dato, es null. "
-    "7) PRUEBA DE VERIFICACION (obligatoria, evita que inventes datos sin "
-    "consultar de verdad): por cada fuente, indica tambien el rival y el "
-    "resultado (marcador) del ULTIMO partido de esos 10 que usaste para el "
-    "promedio. Si dos fuentes dan exactamente el mismo rival+resultado para "
-    "el ultimo partido, es porque es el mismo partido real (normal). Si no "
-    "puedes indicar rival+resultado real de una fuente, esa fuente es null. "
-    "Responde SOLO el JSON, sin texto extra, con esta forma exacta: "
-    '{{"goals": <promedio>, "corners": <promedio>, "cards": <promedio>, '
+    'Promedio por partido de "{team}" en sus ULTIMOS 10 partidos oficiales '
+    "ya jugados, de: goles anotados, tiros de esquina a favor (corners) y "
+    "tarjetas recibidas (amarillas+rojas). "
+    "Toma cada cifra de 3 fuentes: Sofascore, FBref y WhoScored. El valor "
+    "final de cada estadistica es el promedio de las fuentes que tengan el "
+    "dato (3, o 2, o 1). Solo cifras reales de esas fuentes: no estimes ni "
+    "uses partidos similares. Si una fuente no tiene el dato, su valor es "
+    "null (no copies el de otra). "
+    "Responde SOLO este JSON (2 decimales), sin texto extra: "
+    '{{"goals": <prom>, "corners": <prom>, "cards": <prom>, '
     '"fuentes": {{'
     '"goals": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}, '
     '"corners": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}, '
-    '"cards": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}}}, '
-    '"ultimo_partido": {{'
-    '"sofascore": "<rival> <resultado>", '
-    '"fbref": "<rival> <resultado>", '
-    '"whoscored": "<rival> <resultado>"}}}}'
+    '"cards": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}}}}}'
 )
 
 # Numeros decimales (con , o .): los promedios casi siempre se reportan asi
@@ -392,20 +367,6 @@ def _log_source_breakdown(team_name: str, fuentes) -> None:
         log.info("    [fuentes] %s %s: %s", team_name, stat, ", ".join(partes))
 
 
-def _log_last_match(team_name: str, ultimo_partido) -> None:
-    """Loguea el rival+resultado del ultimo partido que cada fuente dice
-    haber usado, como prueba de verificacion: si el modelo de verdad consulto
-    la fuente, esto deberia ser un dato real y estable entre consultas
-    cercanas; si lo deja vacio o cambia sin sentido, esta inventando."""
-    if not isinstance(ultimo_partido, dict):
-        return
-    partes = []
-    for src in ("sofascore", "fbref", "whoscored"):
-        v = ultimo_partido.get(src)
-        partes.append(f"{src}=[{v}]" if v else f"{src}=-")
-    log.info("    [verificacion] %s ultimo partido: %s", team_name, ", ".join(partes))
-
-
 def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
     """Un intento completo: pregunta al Modo IA y parsea la respuesta. Puede
     devolver None si no hubo respuesta o no se pudo extraer el promedio de
@@ -447,11 +408,6 @@ def _get_team_form_once(team_name: str, venue: str) -> TeamForm | None:
         # donde viene la variacion entre consultas (que fuente lee el modelo y
         # con que cifra). No afecta el calculo: el promedio final ya vino arriba.
         _log_source_breakdown(team_name, data.get("fuentes"))
-        # DIAGNOSTICO: rival+resultado del ultimo partido que cada fuente dice
-        # haber usado. Si dos consultas distintas dan rival+resultado real y
-        # consistente, la fuente probablemente SI fue consultada de verdad; si
-        # viene vacio o cambia sin sentido, el modelo esta inventando.
-        _log_last_match(team_name, data.get("ultimo_partido"))
 
     # 2) Para lo que falte (sin JSON, o un null que se colo), se rescata la
     #    cifra de la prosa por cercania a sus palabras clave, con rangos de
