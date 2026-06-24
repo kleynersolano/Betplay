@@ -9,7 +9,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from app.config import MIN_VALUE_PERCENT, MAX_VALUE_PERCENT, MARKET_PRIORITY, DEFAULT_OVERROUND
+from app.config import MIN_VALUE_PERCENT, MAX_VALUE_PERCENT, MARKET_PRIORITY, DEFAULT_OVERROUND, MIN_ODDS
 
 log = logging.getLogger("betbot.analysis")
 from app.scraper_betplay import Match, MarketLine
@@ -325,6 +325,12 @@ def evaluate_match(
                 match.home_team, match.away_team, value_percent, MAX_VALUE_PERCENT,
                 line.market, line.selection,
             )
+            continue
+
+        if line.odds < MIN_ODDS:
+            # Esta linea solo se guardo para calcular el overround real del
+            # lado opuesto (ver _build_opposite_index); no se apuesta una
+            # cuota tan baja.
             continue
 
         if value_percent >= MIN_VALUE_PERCENT:

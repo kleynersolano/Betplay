@@ -209,6 +209,24 @@ _BULK_EXTRACT_JS = """
         return '';
     };
 
+    // Hora de inicio: Kambi la pinta en un nodo <time> (o con
+    // data-event-start) dentro de la misma fila/ancestro cercano de cada
+    // partido. Se busca cerca del nombre del equipo; si no se encuentra,
+    // el llamador usa la hora actual como antes (no rompe nada si el
+    // selector no aplica en este theme de Kambi).
+    const findStartTime = (rowEl) => {
+        let ancestor = rowEl;
+        for (let depth = 0; depth < 6 && ancestor; depth++) {
+            const t = ancestor.querySelector ? ancestor.querySelector('time[datetime]') : null;
+            if (t) {
+                const dt = t.getAttribute('datetime');
+                if (dt) return dt;
+            }
+            ancestor = ancestor.parentElement;
+        }
+        return null;
+    };
+
     const teams = [];
     document.querySelectorAll('.KambiBC-event-participants__name-participant-name').forEach(el => {
         if (!isVisible(el)) return;
@@ -219,6 +237,7 @@ _BULK_EXTRACT_JS = """
             vy: rect.top + rect.height / 2,
             text: (el.innerText || '').trim(),
             competition: findCompetition(el),
+            startTime: findStartTime(el.closest('a, li, div') || el),
         });
     });
     return {teams};
@@ -273,11 +292,19 @@ def fetch_upcoming_matches() -> list[Match]:
 
             competition = teams[i]["competition"]
 
+            kickoff = dt.datetime.now(dt.timezone.utc)
+            raw_start = teams[i].get("startTime")
+            if raw_start:
+                try:
+                    kickoff = dt.datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+
             match = Match(
                 competition=competition,
                 home_team=home,
                 away_team=away,
-                kickoff=dt.datetime.now(dt.timezone.utc),
+                kickoff=kickoff,
             )
             if not match.is_valid_competition:
                 log.info(
@@ -540,14 +567,18 @@ def _collect_visible_markets(page, lines: list[MarketLine]) -> None:
                     odds = float(odds_val.replace(",", "."))
                 except ValueError:
                     continue
-                if odds >= MIN_ODDS:
-                    key = (market_name, f"{direction} {line_val}", odds)
-                    if key in seen_lines:
-                        continue
-                    seen_lines.add(key)
-                    lines.append(
-                        MarketLine(market=market_name, selection=f"{direction} {line_val}", odds=odds)
-                    )
+                # Se guardan TODAS las cuotas, incluso por debajo de MIN_ODDS:
+                # el lado barato de una linea (ej. favorito) se necesita para
+                # calcular el overround real del lado caro que si se podria
+                # apostar. El filtro de MIN_ODDS se aplica en analysis.py al
+                # momento de elegir la apuesta final, no aqui.
+                key = (market_name, f"{direction} {line_val}", odds)
+                if key in seen_lines:
+                    continue
+                seen_lines.add(key)
+                lines.append(
+                    MarketLine(market=market_name, selection=f"{direction} {line_val}", odds=odds)
+                )
 
         if new_market_found:
             stable = 0
