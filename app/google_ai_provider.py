@@ -38,21 +38,42 @@ log = logging.getLogger("betbot.google_ai")
 # JSON, asi que abajo se extraen los numeros del texto por cercania a las
 # palabras clave; el JSON es solo un "si puedes".
 PROMPT_TEMPLATE = (
-    'Promedio por partido de "{team}" en sus ULTIMOS 10 partidos oficiales '
-    "ya jugados, de: goles anotados, tiros de esquina a favor (corners) y "
-    "tarjetas recibidas (amarillas+rojas). "
-    "Toma cada cifra de 3 fuentes: Sofascore, FBref y WhoScored. El valor "
-    "final de cada estadistica es el promedio de las fuentes que tengan el "
-    "dato (3, o 2, o 1). Solo cifras reales de esas fuentes: no estimes ni "
-    "uses partidos similares. Si una fuente no tiene el dato, su valor es "
-    "null (no copies el de otra). "
+    'Consulta POR SEPARADO 3 fuentes independientes -- Sofascore, FBref y '
+    'WhoScored -- por el promedio por partido de "{team}" en sus ULTIMOS 10 '
+    "partidos oficiales ya jugados: goles anotados, corners a favor y "
+    "tarjetas (amarillas+rojas). "
+    "Cada fuente da SU PROPIA cifra real, sin promediar entre fuentes ni "
+    "copiar el valor de una en otra. Si una fuente no tiene el dato, pon "
+    "null ahi. "
     "Responde SOLO este JSON (2 decimales), sin texto extra: "
-    '{{"goals": <prom>, "corners": <prom>, "cards": <prom>, '
-    '"fuentes": {{'
-    '"goals": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}, '
-    '"corners": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}, '
-    '"cards": {{"sofascore": <n>, "fbref": <n>, "whoscored": <n>}}}}}}'
+    '{{"goals": {{"sofascore": <n|null>, "fbref": <n|null>, "whoscored": <n|null>}}, '
+    '"corners": {{"sofascore": <n|null>, "fbref": <n|null>, "whoscored": <n|null>}}, '
+    '"cards": {{"sofascore": <n|null>, "fbref": <n|null>, "whoscored": <n|null>}}}}'
 )
+
+# Tolerancia para considerar que dos fuentes "dicen lo mismo" (los promedios
+# se reportan con redondeos distintos entre sitios; exigir igualdad exacta
+# descartaria coincidencias reales por diferencias de centesimas).
+_AGREEMENT_TOLERANCE = 0.10
+
+
+def _consensus_value(values: list[float]) -> float | None:
+    """De los valores que dieron las fuentes que SI tenian el dato, busca el
+    subgrupo mas grande que coincide entre si (dentro de _AGREEMENT_TOLERANCE)
+    y devuelve su promedio. Si ninguna coincide con otra -- cada fuente dio
+    algo distinto -- se descarta el dato entero (None) en vez de inventar un
+    promedio con cifras que no se corroboran. Tambien se descarta si solo UNA
+    fuente respondio, porque no hay con que confirmarla."""
+    if len(values) < 2:
+        return None
+    best_group: list[float] = []
+    for i, v in enumerate(values):
+        group = [v] + [w for j, w in enumerate(values) if j != i and abs(w - v) <= _AGREEMENT_TOLERANCE]
+        if len(group) > len(best_group):
+            best_group = group
+    if len(best_group) < 2:
+        return None
+    return sum(best_group) / len(best_group)
 
 # Numeros decimales (con , o .): los promedios casi siempre se reportan asi
 # ("1.8", "2,45"), no como enteros (años, marcadores). Filtra mucho ruido.
@@ -369,22 +390,24 @@ def _to_float(value) -> float | None:
         return None
 
 
-def _log_source_breakdown(team_name: str, fuentes) -> None:
-    """Loguea, por estadistica, lo que reporto cada fuente (Sofascore, FBref,
-    WhoScored). Sirve para diagnosticar la variacion entre consultas: si el
-    promedio final cambia, aqui se ve si fue porque una fuente entrego una
-    cifra distinta o porque el modelo dejo de leer alguna fuente."""
-    if not isinstance(fuentes, dict):
-        return
-    for stat in ("goals", "corners", "cards"):
-        per_source = fuentes.get(stat)
-        if not isinstance(per_source, dict):
-            continue
-        partes = []
-        for src in ("sofascore", "fbref", "whoscored"):
-            v = _to_float(per_source.get(src))
-            partes.append(f"{src}={v:.2f}" if v is not None else f"{src}=-")
-        log.info("    [fuentes] %s %s: %s", team_name, stat, ", ".join(partes))
+def _consensus_from_sources(team_name: str, stat: str, per_source) -> float | None:
+    """A partir del desglose por fuente de una estadistica, calcula el valor
+    final por consenso (ver _consensus_value) y lo loguea junto con lo que
+    dijo cada fuente, para poder ver si el descarte fue por falta de datos o
+    por desacuerdo real entre fuentes."""
+    if not isinstance(per_source, dict):
+        return None
+    values: list[float] = []
+    partes = []
+    for src in ("sofascore", "fbref", "whoscored"):
+        v = _to_float(per_source.get(src))
+        partes.append(f"{src}={v:.2f}" if v is not None else f"{src}=-")
+        if v is not None:
+            values.append(v)
+    consensus = _consensus_value(values)
+    veredicto = f"-> {consensus:.2f}" if consensus is not None else "-> descartado (sin acuerdo)"
+    log.info("    [fuentes] %s %s: %s %s", team_name, stat, ", ".join(partes), veredicto)
+    return consensus
 
 
 def _get_team_form_once(team_name: str, venue: str) -> dict[str, float] | None:
@@ -415,20 +438,18 @@ def _get_team_form_once(team_name: str, venue: str) -> dict[str, float] | None:
 
     overrides: dict[str, float] = {}
 
-    # 1) El Modo IA casi siempre responde con un bloque JSON limpio. Se le
-    #    pide explicitamente que NUNCA ponga null, pero por si acaso aun cae
-    #    alguno, abajo (paso 2) se rescata el dato de la prosa.
+    # 1) El Modo IA responde con el desglose por fuente (sin promediar). El
+    #    valor final de cada estadistica se calcula aqui por consenso entre
+    #    fuentes (2 o 3 que coincidan), no se confia en que el modelo lo
+    #    promedie el mismo. Si las fuentes no coinciden entre si, se descarta
+    #    esa estadistica en vez de usar un numero sin corroborar.
     data = _extract_json(raw)
     if data is not None:
         for key in ("goals", "corners", "cards"):
-            val = _to_float(data.get(key))
+            val = _consensus_from_sources(team_name, key, data.get(key))
             if val is not None:
                 overrides[key] = val
-                log.info("    %s %s=%.2f (Modo IA, JSON)", team_name, key, val)
-        # DIAGNOSTICO: loguear el valor que reporto cada fuente, para ver de
-        # donde viene la variacion entre consultas (que fuente lee el modelo y
-        # con que cifra). No afecta el calculo: el promedio final ya vino arriba.
-        _log_source_breakdown(team_name, data.get("fuentes"))
+                log.info("    %s %s=%.2f (Modo IA, consenso de fuentes)", team_name, key, val)
 
     # 2) Para lo que falte (sin JSON, o un null que se colo), se rescata la
     #    cifra de la prosa por cercania a sus palabras clave, con rangos de
