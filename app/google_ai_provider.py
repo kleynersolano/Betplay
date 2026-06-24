@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import tempfile
 
 from playwright.sync_api import sync_playwright
 
@@ -429,7 +430,7 @@ def _get_team_form_once(team_name: str, venue: str) -> dict[str, float] | None:
     # ver exactamente como redacta Google los numeros y afinar el parser.
     try:
         safe = re.sub(r"[^a-zA-Z0-9]+", "_", team_name).strip("_")
-        dump_path = f"/tmp/modo_ia_{safe}.txt"
+        dump_path = f"{tempfile.gettempdir()}/modo_ia_{safe}.txt"
         with open(dump_path, "w", encoding="utf-8") as fh:
             fh.write(raw)
         log.info("    [debug] respuesta cruda guardada en %s", dump_path)
