@@ -6,7 +6,7 @@ import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import google_ai_provider
+from app import google_ai_provider, sheets_logger
 from app.analysis import evaluate_match
 from app.config import GOOGLE_AI_PROFILE_DIR, RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
@@ -71,11 +71,13 @@ def run_cycle() -> None:
     _cleanup_before_cycle()
     log.info("Iniciando ciclo de analisis...")
     try:
-        matches = fetch_upcoming_matches()
+        matches, discarded = fetch_upcoming_matches()
     except Exception:
         log.exception("Fallo al scrapear BetPlay")
         return
     log.info("Partidos validos encontrados: %d", len(matches))
+    for descartado in discarded:
+        sheets_logger.log_discarded(descartado)
     for match in matches:
         if not match.lines:
             log.warning(
@@ -84,6 +86,7 @@ def run_cycle() -> None:
             )
             continue
         try:
+            sheets_logger.log_analizado(match)
             home_form = _get_team_form_with_fallback(
                 match.home_team, venue="home", is_national_team=match.is_national_team_match
             )
@@ -93,6 +96,8 @@ def run_cycle() -> None:
             evaluations = evaluate_match(match, home_form, away_form)
             if evaluations:
                 notify_match_results(evaluations)
+                for evaluation in evaluations:
+                    sheets_logger.log_pronostico(evaluation)
                 log.info("Enviado a Telegram: %s vs %s", match.home_team, match.away_team)
             else:
                 log.info("Sin value: %s vs %s", match.home_team, match.away_team)

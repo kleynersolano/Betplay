@@ -245,11 +245,13 @@ _BULK_EXTRACT_JS = """
 """
 
 
-def fetch_upcoming_matches() -> list[Match]:
+def fetch_upcoming_matches() -> tuple[list[Match], list[Match]]:
     """Abre BetPlay 'starting-soon', selecciona Football + ventana de horas y
-    devuelve los partidos listados (ya filtrados por competicion valida).
-    Como la pestana de horas (ej. '4 horas') ya filtra el listado del lado del
-    sitio, no se vuelve a filtrar por hora aqui.
+    devuelve (validos, descartados): los partidos con competicion valida (con
+    sus cuotas ya extraidas) y los descartados por la lista blanca/negra (sin
+    cuotas, solo para poder registrarlos en el log de seguimiento). Como la
+    pestana de horas (ej. '4 horas') ya filtra el listado del lado del sitio,
+    no se vuelve a filtrar por hora aqui.
 
     BetPlay (Kambi) VIRTUALIZA la lista: solo mantiene en el DOM las filas
     visibles, y reutiliza esos mismos nodos para mostrar otro partido al
@@ -265,6 +267,7 @@ def fetch_upcoming_matches() -> list[Match]:
         pass
 
     matches: list[Match] = []
+    discarded: list[Match] = []
     seen_pairs: set[tuple[str, str]] = set()
 
     def return_to_listing(page) -> None:
@@ -311,6 +314,7 @@ def fetch_upcoming_matches() -> list[Match]:
                     "  DESCARTADO  %-26s vs %-26s | liga: %s",
                     home, away, competition or "(sin liga detectada)",
                 )
+                discarded.append(match)
                 continue
             log.info("  ANALIZANDO  %-26s vs %-26s | liga: %s", home, away, competition)
 
@@ -431,7 +435,7 @@ def fetch_upcoming_matches() -> list[Match]:
                 browser.close()
             except Exception:
                 pass
-    return matches
+    return matches, discarded
 
 
 def _scroll_to_bottom(page, max_scrolls: int = 25) -> None:
