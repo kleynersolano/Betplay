@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import logging
 
-from app.config import GOOGLE_SHEETS_CREDENTIALS_FILE, GOOGLE_SHEETS_ID
+from app.config import (
+    GOOGLE_SHEETS_CREDENTIALS_FILE,
+    GOOGLE_SHEETS_CREDENTIALS_JSON,
+    GOOGLE_SHEETS_ID,
+)
 
 log = logging.getLogger("betbot.sheets")
 
@@ -49,13 +53,18 @@ def _get_sheet():
     credenciales configuradas o si falla la conexion -- en ambos casos el
     llamador debe seguir funcionando sin Sheets."""
     global _client, _sheet
-    if not GOOGLE_SHEETS_CREDENTIALS_FILE or not GOOGLE_SHEETS_ID:
+    if not GOOGLE_SHEETS_ID or not (GOOGLE_SHEETS_CREDENTIALS_JSON or GOOGLE_SHEETS_CREDENTIALS_FILE):
         return None
     if _sheet is not None:
         return _sheet
     try:
         import gspread
-        _client = gspread.service_account(filename=GOOGLE_SHEETS_CREDENTIALS_FILE)
+        if GOOGLE_SHEETS_CREDENTIALS_JSON:
+            import json
+            info = json.loads(GOOGLE_SHEETS_CREDENTIALS_JSON)
+            _client = gspread.service_account_from_dict(info)
+        else:
+            _client = gspread.service_account(filename=GOOGLE_SHEETS_CREDENTIALS_FILE)
         _sheet = _client.open_by_key(GOOGLE_SHEETS_ID)
         return _sheet
     except Exception:
