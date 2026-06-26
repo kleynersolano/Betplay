@@ -162,20 +162,27 @@ def _find_input(page):
     placeholder visible ('Haz una pregunta' / 'Pregunta'), el rol de
     combobox/textbox, y por ultimo selectores clasicos del buscador."""
     candidates = [
-        lambda: page.get_by_placeholder(re.compile("Haz una pregunta|Pregunta", re.I)),
+        lambda: page.get_by_placeholder(re.compile("Haz una pregunta|Pregunta|Ask", re.I)),
+        lambda: page.get_by_label(re.compile("Haz una pregunta|Pregunta|Ask", re.I)),
         lambda: page.get_by_role("combobox"),
         lambda: page.get_by_role("textbox"),
         lambda: page.locator("textarea[name='q'], textarea#APjFqb"),
         lambda: page.locator("div[contenteditable='true']"),
+        lambda: page.locator("textarea"),
     ]
-    for build in candidates:
-        try:
-            loc = build().first
-            if loc.count() > 0:
-                loc.wait_for(state="visible", timeout=3000)
-                return loc
-        except Exception:
-            continue
+    # El Modo IA renderiza la casilla de forma asincrona; se reintenta por
+    # hasta ~12s en vez de rendirse al primer vistazo (antes fallaba aunque
+    # la casilla 'Haz una pregunta' SI terminaba apareciendo).
+    for _ in range(6):
+        for build in candidates:
+            try:
+                loc = build().first
+                if loc.count() > 0:
+                    loc.wait_for(state="visible", timeout=2000)
+                    return loc
+            except Exception:
+                continue
+        page.wait_for_timeout(2000)
     return None
 
 
