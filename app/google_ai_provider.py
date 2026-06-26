@@ -244,6 +244,24 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
     input_box = _find_input(page)
     if input_box is None:
         log.warning("No se encontro el campo de texto del Modo IA")
+        # Diagnostico: guarda una captura y el texto de la pagina para
+        # poder ver QUE esta mostrando Google (login, aviso de cookies,
+        # CAPTCHA, etc.) cuando no aparece el buscador del Modo IA.
+        try:
+            tmp = tempfile.gettempdir()
+            page.screenshot(path=f"{tmp}/modo_ia_sin_campo.png", full_page=True)
+            body_txt = ""
+            try:
+                body_txt = page.locator("body").inner_text(timeout=2000)
+            except Exception:
+                pass
+            with open(f"{tmp}/modo_ia_sin_campo.txt", "w", encoding="utf-8") as fh:
+                fh.write(f"URL: {page.url}\n\n{body_txt}")
+            log.warning(
+                "Diagnostico guardado en %s/modo_ia_sin_campo.png y .txt", tmp
+            )
+        except Exception:
+            pass
         return None
 
     def _typed_text() -> str:
