@@ -23,18 +23,6 @@ GOOGLE_AI_HEADLESS = os.getenv("GOOGLE_AI_HEADLESS", "true").lower() == "true"
 # y ver el proceso en pantalla). En servidor sin entorno grafico debe ir en true.
 BETPLAY_HEADLESS = os.getenv("BETPLAY_HEADLESS", "false").lower() == "true"
 
-# Registro en Google Sheets (control manual de descartados/analizados/
-# pronosticos). Vacio = el registro se omite sin romper el bot.
-# Las credenciales se pueden dar de dos formas (sirve cualquiera de las
-# dos, util porque el bot se corre desde mas de una maquina):
-#   - GOOGLE_SHEETS_CREDENTIALS_JSON: el contenido completo del JSON de la
-#     cuenta de servicio, pegado en una sola linea dentro del .env. No
-#     requiere copiar un archivo aparte a cada PC.
-#   - GOOGLE_SHEETS_CREDENTIALS_FILE: ruta a ese mismo JSON guardado como
-#     archivo en disco (alternativa si prefieres no pegarlo en el .env).
-GOOGLE_SHEETS_CREDENTIALS_JSON = os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON", "")
-GOOGLE_SHEETS_CREDENTIALS_FILE = os.getenv("GOOGLE_SHEETS_CREDENTIALS_FILE", "")
-GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID", "")
 
 HOURS_AHEAD = int(os.getenv("HOURS_AHEAD", "4"))
 RUN_INTERVAL_MINUTES = int(os.getenv("RUN_INTERVAL_MINUTES", "30"))
