@@ -179,6 +179,47 @@ def _find_input(page):
     return None
 
 
+def _enter_ai_mode_tab(page) -> None:
+    """Entra al Modo IA haciendo clic en la pestana 'Modo IA' / 'AI Mode'
+    que aparece debajo del buscador de Google (junto a Todo, Imagenes,
+    Videos, etc.). Si no se entro directo por la URL udm=50 (porque la
+    cuenta/equipo dice 'no disponible'), este es el camino que sigue una
+    persona y suele funcionar. Si la pestana no esta, primero se hace una
+    busqueda normal para que Google renderice esa barra de pestanas."""
+    candidates = [
+        lambda: page.get_by_role("link", name=re.compile(r"Modo IA|AI Mode", re.I)),
+        lambda: page.get_by_role("tab", name=re.compile(r"Modo IA|AI Mode", re.I)),
+        lambda: page.get_by_text(re.compile(r"^\s*(Modo IA|AI Mode)\s*$", re.I)),
+    ]
+
+    def _try_click() -> bool:
+        for build in candidates:
+            try:
+                loc = build().first
+                if loc.count() > 0:
+                    loc.click(timeout=4000)
+                    page.wait_for_timeout(2500)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    if _try_click():
+        return
+    # No aparecio la pestana: hacer una busqueda cualquiera para que se
+    # renderice la barra de pestanas (Todo/Imagenes/.../Modo IA) y reintentar.
+    try:
+        page.goto(
+            "https://www.google.com/search?q=futbol",
+            wait_until="domcontentloaded",
+            timeout=30_000,
+        )
+        page.wait_for_timeout(2000)
+    except Exception:
+        return
+    _try_click()
+
+
 def _input_center(page, locator) -> tuple[int, int]:
     """Coordenadas del centro del campo de texto, para un click por mouse
     como ultimo recurso cuando ni el foco por JS ni el click de Playwright
@@ -241,6 +282,13 @@ def _ask_once(page, prompt: str, max_wait_ms: int) -> str | None:
         except Exception:
             pass
     page.wait_for_timeout(2500)
+    # Si la URL directa del Modo IA (udm=50) dice "no disponible" o no
+    # muestra el buscador, se entra al Modo IA como lo haria una persona:
+    # haciendo clic en la pestana "Modo IA" que aparece debajo del buscador
+    # de Google (junto a Todo/Imagenes/Videos). En varias cuentas/equipos
+    # la pestana funciona aunque la URL directa diga que no esta disponible.
+    if _find_input(page) is None:
+        _enter_ai_mode_tab(page)
     input_box = _find_input(page)
     if input_box is None:
         log.warning("No se encontro el campo de texto del Modo IA")
