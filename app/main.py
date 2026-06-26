@@ -1,50 +1,135 @@
+import gc
 import logging
+import os
+import re
+import subprocess
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from app import google_ai_provider
 from app.analysis import evaluate_match
-from app.config import RUN_INTERVAL_MINUTES
+from app.config import GOOGLE_AI_PROFILE_DIR, RUN_INTERVAL_MINUTES
 from app.scraper_betplay import fetch_upcoming_matches
-from app.stats_provider import get_team_form
+from app.sheets_writer import SheetsWriter
+from app.stats_provider import TeamForm
 from app.telegram_notifier import notify_match_results, send_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("betbot")
 
 
+def _get_team_form_with_fallback(
+    team_name: str, venue: str, is_national_team: bool = False
+) -> TeamForm | None:
+    """El Modo IA de Google Search (pestana "Modo IA", udm=50) es la UNICA
+    fuente de datos: una sola consulta por equipo que pide a la vez goles,
+    tiros de esquina y tarjetas de sus ultimos partidos, y responde con la
+    cifra citando varias fuentes (Sofascore/FBref/etc.). A diferencia de la
+    busqueda normal, el Modo IA NO dispara CAPTCHA. Si no da datos, el equipo
+    no se evalua."""
+    try:
+        return google_ai_provider.get_team_form(
+            team_name, venue=venue, is_national_team=is_national_team
+        )
+    except Exception:
+        log.exception("Fallo consultando el Modo IA de Google para %s", team_name)
+        return None
+
+
+def _cleanup_before_cycle() -> None:
+    """Tras varios ciclos seguidos lanzando y cerrando Chromium (BetPlay y
+    Google AI Mode), procesos huerfanos que quedaron vivos por un cierre
+    fallido (crash, Ctrl+C a mitad de operacion, etc.) se iban acumulando y
+    terminaban consumiendo toda la RAM, dejando el equipo lento al punto de
+    que ni BetPlay terminaba de cargar las cuotas. Antes de cada ciclo se
+    matan procesos de Chromium que hayan quedado colgados (no deberia haber
+    ninguno vivo entre ciclos, ya que cada scraper cierra su navegador al
+    terminar) y se fuerza una recoleccion de basura de Python.
+
+    Antes el patron solo cubria Chromium *headless* (chrome-linux/headless_shell)
+    o con --remote-debugging; al correr con GOOGLE_AI_HEADLESS=false el
+    navegador es VISIBLE y no coincidia con ese patron, asi que esos
+    procesos quedaban vivos y se acumulaban (equipo lento). Se agrega el
+    directorio del perfil persistente (--user-data-dir=<perfil>), que SI
+    aparece tanto en headless como en visible, para matarlos en ambos casos."""
+    profile = os.path.basename(os.path.normpath(GOOGLE_AI_PROFILE_DIR))
+    patterns = [
+        "chrome-linux/headless_shell",
+        "chromium.*--remote-debugging",
+        f"--user-data-dir=[^ ]*{re.escape(profile)}",
+    ]
+    try:
+        subprocess.run(
+            ["pkill", "-9", "-f", "|".join(patterns)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+    gc.collect()
+
+
 def run_cycle() -> None:
-      log.info("Iniciando ciclo de analisis...")
-      try:
-                matches = fetch_upcoming_matches()
-except Exception:
+    _cleanup_before_cycle()
+    log.info("Iniciando ciclo de analisis...")
+    try:
+        matches, discarded = fetch_upcoming_matches()
+    except Exception:
         log.exception("Fallo al scrapear BetPlay")
         return
     log.info("Partidos validos encontrados: %d", len(matches))
+
+    analizados: list = []
+    pronosticos: list = []
     for match in matches:
-              try:
-                            home_form = get_team_form(match.home_team, venue="home")
-                            away_form = get_team_form(match.away_team, venue="away")
-                            evaluations = evaluate_match(match, home_form, away_form)
-                            if evaluations:
-                                              notify_match_results(evaluations)
-                                              log.info("Enviado a Telegram: %s vs %s", match.home_team, match.away_team)
-              else:
-                                log.info("Sin value: %s vs %s", match.home_team, match.away_team)
-except Exception:
+        if not match.lines:
+            log.warning(
+                "Sin cuotas extraidas para %s vs %s, se omite (no se consulta IA)",
+                match.home_team, match.away_team,
+            )
+            continue
+        analizados.append(match)
+        try:
+            home_form = _get_team_form_with_fallback(
+                match.home_team, venue="home", is_national_team=match.is_national_team_match
+            )
+            away_form = _get_team_form_with_fallback(
+                match.away_team, venue="away", is_national_team=match.is_national_team_match
+            )
+            evaluations = evaluate_match(match, home_form, away_form)
+            if evaluations:
+                notify_match_results(evaluations)
+                pronosticos.extend(evaluations)
+                log.info("Enviado a Telegram: %s vs %s", match.home_team, match.away_team)
+            else:
+                log.info("Sin value: %s vs %s", match.home_team, match.away_team)
+        except Exception:
             log.exception("Error procesando %s vs %s", match.home_team, match.away_team)
+
+    # Se escribe en Google Sheets al FINAL del ciclo, una sola vez: BetPlay
+    # y el Modo IA ya cerraron sus propias sesiones de Playwright, asi que
+    # aqui no hay riesgo de dos sesiones sync compitiendo por el mismo hilo.
+    log.info("Registrando en Google Sheets...")
+    with SheetsWriter() as sheet:
+        if sheet.page:
+            for descartado in discarded:
+                sheet.log_discarded(descartado)
+            for match in analizados:
+                sheet.log_analizado(match)
+            for evaluation in pronosticos:
+                sheet.log_pronostico(evaluation)
     log.info("Ciclo terminado.")
 
 
 def main() -> None:
-      send_message("Bot de analisis BetPlay iniciado correctamente.")
-      run_cycle()
-      scheduler = BlockingScheduler(timezone="UTC")
-      scheduler.add_job(run_cycle, "interval", minutes=RUN_INTERVAL_MINUTES)
-      try:
-                scheduler.start()
-except (KeyboardInterrupt, SystemExit):
+    send_message("Bot de analisis BetPlay iniciado correctamente.")
+    run_cycle()
+    scheduler = BlockingScheduler(timezone="UTC")
+    scheduler.add_job(run_cycle, "interval", minutes=RUN_INTERVAL_MINUTES)
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
         pass
 
 
 if __name__ == "__main__":
-      main()
+    main()
